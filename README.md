@@ -83,9 +83,26 @@ RISC-V pair on plain nightly, so the C6 and C3 do not pay for a forked compiler.
 
 ## Wiring
 
-Seven pins: SPI (SCLK, MOSI, MISO, CS) plus RST for the RC522, and SDA/SCL for
-the panel. The assignment is a `cfg`-gated tuple in `toolguard-fw/src/main.rs`,
-one arm per chip, and the reasoning is in `toolguard-fw/src/board.rs`.
+Seven pins always: SPI (SCLK, MOSI, MISO, CS) plus RST for the RC522, and
+SDA/SCL for the panel. Two more are used only by the roles that need them —
+a **sense** input for a box that watches the machine, and a **relay** output for
+one that switches it. The assignment is a `cfg`-gated tuple in
+`toolguard-fw/src/main.rs`, one arm per chip, and the reasoning is in
+`toolguard-fw/src/board.rs`.
+
+**What the box is, is configuration and not a build.** One image is flashed and
+the same board becomes a badge reader beside a laser, a reader that also
+switches it, a reader that watches it work, or a plug with no reader at all. The
+settings are on the device's own setup page and are read at boot; see
+`toolguard-fw/src/settings.rs` for each one, its default, and what going wrong
+looks like. Two are worth knowing before wiring anything:
+
+- **"Senses the machine"** must be `no` unless something really is wired to the
+  sense input. A device that reports zero working time is believed, and on a
+  tool billed by working time that bills nothing.
+- **"Switches the tool"** must be `yes` only if a relay is wired, because it is
+  also what makes this device register in the `power` role — and the platform
+  will not lease a tool to a box that claims to switch it and does not.
 
 Two electrical notes worth having before wiring anything:
 

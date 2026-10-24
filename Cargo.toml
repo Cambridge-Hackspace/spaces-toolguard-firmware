@@ -20,8 +20,8 @@ toolguard-core = { path = "toolguard-core" }
 # nfc-522 pinned esp-idf-sys/hal/svc at git master through [patch.crates-io]
 # and its builds changed underneath it; a tag is the fix, and v0.1.0 exists for
 # exactly this.
-spaces-device = { git = "https://github.com/Cambridge-Hackspace/spaces-firmware", tag = "v0.1.0" }
-spaces-device-espidf = { git = "https://github.com/Cambridge-Hackspace/spaces-firmware", tag = "v0.1.0" }
+spaces-device = { git = "https://github.com/Cambridge-Hackspace/spaces-firmware", tag = "v0.2.0" }
+spaces-device-espidf = { git = "https://github.com/Cambridge-Hackspace/spaces-firmware", tag = "v0.2.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"

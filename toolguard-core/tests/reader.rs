@@ -1,24 +1,46 @@
-//! The rules a badge reader must not get wrong, each pinned by a test.
+//! What a member reads off the panel, and the one decision this device makes
+//! on its own.
 //!
 //! Time is whatever these tests say it is: every call takes the current
 //! monotonic milliseconds, which is what makes a reply timing out testable.
 //!
 //! There is no board yet, and that is the point rather than an excuse. Every
-//! assertion here is about a decision or about what a person reads off a 1602,
-//! and none of it needs an RC522 to be true.
+//! assertion here is about what a person reads off a 1602, and none of it needs
+//! an RC522 to be true.
+//!
+//! **WHAT THIS FILE DELIBERATELY NO LONGER COVERS.** It used to assert the
+//! protocol too — that an unparseable answer is a refusal, that a reply naming
+//! another tool is dropped before its verdict is read, that a timeout is a no,
+//! that `ok` without a yes is not a yes. Those rules now live in exactly one
+//! implementation, `spaces_device::Module`, and are pinned by its own tests.
+//! Asserting them here as well would be testing a re-export: the duplicate
+//! would agree with the original no matter what either did, and the day they
+//! disagreed the one that mattered would be the one these tests were not
+//! reading. What is left is what this crate actually decides.
 
-use serde_json::json;
 use spaces_device::wire::topic;
-use toolguard_core::reader::{Action, Reader, REPLY_TIMEOUT_MS, SAME_CARD_COOLDOWN_MS, SHOW_MS};
+use spaces_device::Output;
+use toolguard_core::reader::{Action, Reader, SAME_CARD_COOLDOWN_MS, SHOW_MS};
 use toolguard_core::screen::{Health, COLS};
+use toolguard_core::Config;
 
+const ME: &str = "dev-uuid-me";
 const TOOL: &str = "laser-01";
 const ALICE: &str = "04A1B2C3";
 const BOB: &str = "04D4E5F6";
 
-/// A reader that is online and idle.
+/// A reader with no relay, online and idle: the plainest badge reader.
 fn reader() -> Reader {
-    let mut r = Reader::new(TOOL);
+    let mut r = Reader::new(Config::switches_nothing(ME, TOOL));
+    r.start(0);
+    r.health(online(), 0);
+    r
+}
+
+/// A reader that also switches the tool, so it is leased.
+fn gating_reader() -> Reader {
+    let mut r = Reader::new(Config::new(ME, TOOL));
+    r.start(0);
     r.health(online(), 0);
     r
 }
@@ -44,6 +66,17 @@ fn published(actions: &[Action], name: &str) -> Vec<serde_json::Value> {
         .collect()
 }
 
+fn publishes_to(actions: &[Action]) -> Vec<&'static str> {
+    actions
+        .iter()
+        .filter_map(|a| match a {
+            Action::Publish { topic, .. } => Some(*topic),
+            _ => None,
+        })
+        .filter(|t| *t != topic::POWER_REPORT)
+        .collect()
+}
+
 /// The last screen an action list puts up, as `(top, bottom)`.
 fn screen(actions: &[Action]) -> Option<(String, String)> {
     actions.iter().rev().find_map(|a| match a {
@@ -52,270 +85,38 @@ fn screen(actions: &[Action]) -> Option<(String, String)> {
     })
 }
 
-fn yes_for(tool: &str) -> Vec<u8> {
-    json!({"tool_id": tool, "authorized": true, "reason": "authorized"})
+fn here(r: &Reader) -> (String, String) {
+    let s = r.screen().expect("the panel should have content");
+    (s.top().to_string(), s.bottom().to_string())
+}
+
+fn yes() -> Vec<u8> {
+    serde_json::json!({"tool_id": TOOL, "authorized": true, "reason": "authorized"})
         .to_string()
         .into_bytes()
 }
 
-fn no_for(tool: &str, reason: &str) -> Vec<u8> {
-    json!({"tool_id": tool, "authorized": false, "reason": reason})
+fn no(reason: &str) -> Vec<u8> {
+    serde_json::json!({"tool_id": TOOL, "authorized": false, "reason": reason})
         .to_string()
         .into_bytes()
 }
 
-// ------------------------------------------------------------- asking
-
-#[test]
-fn a_card_asks_the_edge_about_this_tool_and_that_card() {
-    let mut r = reader();
-    let actions = r.card(ALICE, 100);
-
-    let sent = published(&actions, topic::TOOL_ON_REQUEST);
-    assert_eq!(sent.len(), 1, "one card, one request: {actions:?}");
-    assert_eq!(sent[0]["card"], ALICE);
-    assert_eq!(
-        sent[0]["tool_id"], TOOL,
-        "the request must name the tool this reader guards, or the edge answers about something else"
-    );
+fn lease(ttl_ms: u64) -> Vec<u8> {
+    serde_json::json!({"tool_id": TOOL, "device_id": ME, "grant": true, "ttl_ms": ttl_ms})
+        .to_string()
+        .into_bytes()
 }
 
-#[test]
-fn the_panel_says_it_is_working_while_it_waits() {
-    let mut r = reader();
-    let (top, _) = screen(&r.card(ALICE, 100)).expect("a screen while asking");
-    assert_eq!(top, "Checking card");
-}
+// ------------------------------------------- the one local decision: not ready
 
 #[test]
-fn a_second_card_while_waiting_is_dropped_not_queued() {
-    // The reply carries no card, so two requests in flight cannot be told
-    // apart and the second would take the first's answer.
-    let mut r = reader();
-    r.card(ALICE, 100);
-    let actions = r.card(BOB, 200);
-    assert!(
-        published(&actions, topic::TOOL_ON_REQUEST).is_empty(),
-        "a second card must not produce a second request: {actions:?}"
-    );
-}
-
-#[test]
-fn the_same_card_held_against_the_reader_is_one_tap() {
-    let mut r = reader();
-    r.card(ALICE, 100);
-    // Answer it, so the reader is idle rather than busy -- otherwise this would
-    // pass for the wrong reason, via the one-outstanding-request rule above.
-    r.message(topic::TOOL_ON_RESPONSE, &yes_for(TOOL), 150);
-    r.tick(150 + SHOW_MS);
-
-    // The window runs from the last READ of that card -- not from the outcome
-    // clearing, which is what my first version measured and which left the card
-    // long out of cooldown.
-    let again = r.card(ALICE, 100 + SAME_CARD_COOLDOWN_MS - 1);
-    assert!(
-        published(&again, topic::TOOL_ON_REQUEST).is_empty(),
-        "the same card inside the cooldown must not ask again: {again:?}"
-    );
-
-    // AND THE WINDOW SLIDES, which the suppressed read above just moved. That
-    // is the point rather than an accident: an RC522 reports a card for as long
-    // as it is in the field, so a card left sitting there must stay quiet the
-    // whole time instead of asking afresh every two seconds. Measuring from the
-    // FIRST read would make a forgotten card a request generator.
-    let held = r.card(ALICE, 100 + SAME_CARD_COOLDOWN_MS + 1);
-    assert!(
-        published(&held, topic::TOOL_ON_REQUEST).is_empty(),
-        "a card still in the field must stay suppressed: {held:?}"
-    );
-
-    // Removed for the whole window, then presented again: a member really can
-    // tap twice, and this is the arm that stops the cooldown from being a mute.
-    let last_read = 100 + SAME_CARD_COOLDOWN_MS + 1;
-    let later = r.card(ALICE, last_read + SAME_CARD_COOLDOWN_MS + 1);
-    assert_eq!(
-        published(&later, topic::TOOL_ON_REQUEST).len(),
-        1,
-        "after the card has been away for the whole window it must ask again"
-    );
-}
-
-#[test]
-fn a_different_card_is_never_held_off_by_the_cooldown() {
-    // The control for the arm above: a cooldown that suppressed everything
-    // would pass it, and would make the reader useless for a queue of people.
-    let mut r = reader();
-    r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &no_for(TOOL, "Unknown card"), 150);
-    r.tick(150 + SHOW_MS);
-
-    let bob = r.card(BOB, 150 + SHOW_MS + 1);
-    assert_eq!(
-        published(&bob, topic::TOOL_ON_REQUEST).len(),
-        1,
-        "a different card must ask immediately: {bob:?}"
-    );
-}
-
-// ------------------------------------------------------------- answers
-
-#[test]
-fn a_yes_shows_granted() {
-    let mut r = reader();
-    r.card(ALICE, 100);
-    let actions = r.message(topic::TOOL_ON_RESPONSE, &yes_for(TOOL), 200);
-    assert_eq!(
-        screen(&actions).map(|(t, _)| t),
-        Some("ACCESS GRANTED".into())
-    );
-}
-
-#[test]
-fn a_no_shows_denied_and_the_reason() {
-    let mut r = reader();
-    r.card(ALICE, 100);
-    let actions = r.message(
-        topic::TOOL_ON_RESPONSE,
-        &no_for(TOOL, "Training required"),
-        200,
-    );
-    let (top, bottom) = screen(&actions).expect("a screen for a refusal");
-    assert_eq!(top, "ACCESS DENIED");
-    assert_eq!(
-        bottom, "Training require",
-        "the edge's own reason belongs on the panel, CUT TO FIT -- and this is \
-         the finding, not a quirk of the fixture: `Training required` is 17 \
-         characters and the commonest refusal the platform sends, so the most \
-         frequent denial a member sees loses its last letter. Recorded in the \
-         README; shortening it here would mean matching on reason text, which \
-         FIRMWARE.md warns against."
-    );
-}
-
-#[test]
-fn an_unparseable_answer_is_a_refusal_and_not_an_absence() {
-    // Something answered. Absence of a yes is never permission.
-    let mut r = reader();
-    r.card(ALICE, 100);
-    let actions = r.message(topic::TOOL_ON_RESPONSE, b"{not json", 200);
-    assert_eq!(
-        screen(&actions).map(|(t, _)| t),
-        Some("ACCESS DENIED".into())
-    );
-}
-
-#[test]
-fn a_reply_with_no_verdict_is_not_a_yes() {
-    let mut r = reader();
-    r.card(ALICE, 100);
-    let actions = r.message(
-        topic::TOOL_ON_RESPONSE,
-        json!({"tool_id": TOOL, "reason": "hmm"})
-            .to_string()
-            .as_bytes(),
-        200,
-    );
-    assert_eq!(
-        screen(&actions).map(|(t, _)| t),
-        Some("ACCESS DENIED".into()),
-        "a reply arriving is not a yes, and a missing `authorized` is not a yes"
-    );
-}
-
-#[test]
-fn nothing_answering_is_a_no_that_does_not_blame_the_member() {
-    let mut r = reader();
-    r.card(ALICE, 100);
-    let actions = r.tick(100 + REPLY_TIMEOUT_MS);
-    let (top, _) = screen(&actions).expect("a screen when the edge is silent");
-    assert_eq!(
-        top, "No answer",
-        "a timeout is a no, but a different no from a refusal: the member did \
-         nothing wrong and retrying may work"
-    );
-}
-
-// --------------------------------------------- whose answer is this (CS:S #166)
-
-#[test]
-fn an_answer_about_another_tool_does_not_decide_anything_here() {
-    let mut r = reader();
-    r.card(ALICE, 100);
-    let actions = r.message(topic::TOOL_ON_RESPONSE, &yes_for("drill-07"), 200);
-    assert!(
-        screen(&actions).is_none(),
-        "a neighbour's verdict must not reach this panel: {actions:?}"
-    );
-}
-
-#[test]
-fn and_our_own_answer_still_arrives_afterwards() {
-    // The control, and the reason the phase must not change: treating a
-    // neighbour's reply as a refusal would deny this member for someone else's
-    // swipe at another machine.
-    let mut r = reader();
-    r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &yes_for("drill-07"), 200);
-    let ours = r.message(topic::TOOL_ON_RESPONSE, &yes_for(TOOL), 300);
-    assert_eq!(
-        screen(&ours).map(|(t, _)| t),
-        Some("ACCESS GRANTED".into()),
-        "after ignoring a stray answer, ours must still be honoured"
-    );
-}
-
-#[test]
-fn an_answer_naming_no_tool_is_still_accepted() {
-    // An edge predating CS:S #166 sends no tool_id. Refusing those would brick
-    // this reader against an edge that has not been updated, so the absent case
-    // falls back to the one-outstanding-request window. A deliberate hole, with
-    // a test rather than a comment.
-    let mut r = reader();
-    r.card(ALICE, 100);
-    let actions = r.message(
-        topic::TOOL_ON_RESPONSE,
-        json!({"authorized": true}).to_string().as_bytes(),
-        200,
-    );
-    assert_eq!(
-        screen(&actions).map(|(t, _)| t),
-        Some("ACCESS GRANTED".into())
-    );
-}
-
-#[test]
-fn an_answer_with_nothing_outstanding_is_ignored() {
-    let mut r = reader();
-    let actions = r.message(topic::TOOL_ON_RESPONSE, &yes_for(TOOL), 100);
-    assert!(
-        screen(&actions).is_none(),
-        "a late or stray answer must not show a verdict nobody asked for: {actions:?}"
-    );
-}
-
-#[test]
-fn a_lease_is_somebody_elses_business() {
-    // A reader has no relay and is never bound in the `power` role, so it is
-    // never leased. Silence here is correct rather than an omission.
-    let mut r = reader();
-    let actions = r.message(
-        topic::LEASE,
-        json!({"tool_id": TOOL, "device_id": "x", "grant": true, "ttl_ms": 3000})
-            .to_string()
-            .as_bytes(),
-        100,
-    );
-    assert!(
-        actions.is_empty(),
-        "a lease must change nothing: {actions:?}"
-    );
-}
-
-// ------------------------------------------------------------- offline
-
-#[test]
-fn a_card_is_not_sent_when_there_is_no_broker_to_send_it_to() {
-    let mut r = Reader::new(TOOL);
+fn a_card_is_not_sent_when_there_is_nothing_to_send_it_to() {
+    // Publishing into a broker this device is not connected to is silently
+    // dropped, and the member watches a reader do nothing at all. The
+    // diagnostic screen says which half is missing instead.
+    let mut r = Reader::new(Config::switches_nothing(ME, TOOL));
+    r.start(0);
     r.health(
         Health {
             wifi: true,
@@ -325,105 +126,137 @@ fn a_card_is_not_sent_when_there_is_no_broker_to_send_it_to() {
         },
         0,
     );
-    let actions = r.card(ALICE, 100);
+    let out = r.card(ALICE, 100);
     assert!(
-        published(&actions, topic::TOOL_ON_REQUEST).is_empty(),
-        "publishing into a broker we are not connected to is a silent drop, and \
-         the member watches a reader do nothing: {actions:?}"
+        publishes_to(&out).is_empty(),
+        "a card was sent with no broker: {out:?}"
     );
-    // No `Show` here, and that is correct: the diagnostic screen was already up
-    // from `health()`, and redrawing an unchanged panel is suppressed. So the
-    // assertion reads the panel's STATE rather than the event.
-    assert_eq!(
-        r.screen().map(|s| s.top().to_string()),
-        Some("No edge".into()),
-        "the member must be looking at which half is missing"
-    );
+    // Asserted on panel STATE, not on the action list: `health` above already
+    // put this screen up and `Show` is emitted only on change, so there is
+    // nothing to redraw. The member is looking at the right thing either way,
+    // which is the claim.
+    assert_eq!(here(&r).0, "No edge");
 }
 
 #[test]
 fn the_panel_names_which_half_is_missing() {
-    let mut r = Reader::new(TOOL);
-    let no_wifi = r.health(Health::default(), 0);
-    assert_eq!(screen(&no_wifi).map(|(t, _)| t), Some("No Wi-Fi".into()));
-
-    let mut r2 = Reader::new(TOOL);
-    let no_edge = r2.health(
-        Health {
-            wifi: true,
-            broker: false,
-            address: None,
-            clock: None,
-        },
-        0,
-    );
-    assert_eq!(
-        screen(&no_edge).map(|(t, _)| t),
-        Some("No edge".into()),
-        "\"it is not working\" is not a diagnostic; which half is"
-    );
+    let mut r = Reader::new(Config::switches_nothing(ME, TOOL));
+    r.start(0);
+    for (wifi, broker, top) in [
+        (false, false, "No Wi-Fi"),
+        (false, true, "No Wi-Fi"),
+        (true, false, "No edge"),
+    ] {
+        r.health(
+            Health {
+                wifi,
+                broker,
+                address: Some("10.0.0.9".into()),
+                clock: None,
+            },
+            0,
+        );
+        assert_eq!(here(&r).0, top, "wifi={wifi} broker={broker}");
+    }
 }
 
 #[test]
 fn the_diagnostic_screen_carries_the_address_to_reach_the_log_at() {
-    let mut r = Reader::new(TOOL);
-    let actions = r.health(
+    let mut r = Reader::new(Config::switches_nothing(ME, TOOL));
+    r.start(0);
+    r.health(
         Health {
-            wifi: true,
+            wifi: false,
             broker: false,
             address: Some("192.168.1.50".into()),
             clock: None,
         },
         0,
     );
-    let (_, bottom) = screen(&actions).expect("a diagnostic screen");
-    assert_eq!(bottom, "192.168.1.50");
+    assert_eq!(here(&r).1, "192.168.1.50");
 }
 
-// ------------------------------------------------------------- the panel
+// ------------------------------------------------------------- the cooldown
 
 #[test]
-fn every_screen_fits_the_panel() {
-    // The assertion that only exists because the panel is 16x2 and the edge's
-    // reasons are not. `Tool not authorized for this user` is 38 characters.
-    let long = "Tool not authorized for this user";
+fn the_same_card_held_against_the_reader_is_one_tap() {
+    // The RC522 reports a card for as long as it is in the field.
+    let mut r = reader();
+    let first = r.card(ALICE, 100);
+    assert_eq!(publishes_to(&first), vec![topic::TOOL_ON_REQUEST]);
+    for t in [150, 400, 900, 100 + SAME_CARD_COOLDOWN_MS - 1] {
+        let again = r.card(ALICE, t);
+        assert!(
+            publishes_to(&again).is_empty(),
+            "a held card asked twice at {t}: {again:?}"
+        );
+    }
+}
+
+/// And the cooldown is what stops one finger from both opening a session and
+/// signing off from it, where a re-tap is the stop.
+#[test]
+fn a_held_card_does_not_open_a_session_and_immediately_close_it() {
     let mut r = reader();
     r.card(ALICE, 100);
-    let actions = r.message(topic::TOOL_ON_RESPONSE, &no_for(TOOL, long), 200);
-    let (top, bottom) = screen(&actions).expect("a screen");
+    r.message(topic::TOOL_ON_RESPONSE, &yes(), 150);
+    let held = r.card(ALICE, 200);
     assert!(
-        top.chars().count() <= COLS && bottom.chars().count() <= COLS,
-        "a screen overflowed the panel: {top:?} / {bottom:?}"
+        publishes_to(&held).is_empty(),
+        "the same finger signed the member straight back out: {held:?}"
     );
-    assert_eq!(bottom, "Tool not authori", "cut to the panel, not dropped");
 }
 
 #[test]
-fn a_multibyte_reason_is_cut_by_character_and_does_not_panic() {
-    // `str::truncate` panics on a multi-byte boundary, and a reason from the
-    // edge is arbitrary UTF-8 this firmware does not control.
+fn a_different_card_is_never_held_off_by_the_cooldown() {
     let mut r = reader();
     r.card(ALICE, 100);
-    let actions = r.message(
-        topic::TOOL_ON_RESPONSE,
-        &no_for(TOOL, "ééééééééééééééééééé"),
-        200,
+    let bob = r.card(BOB, 150);
+    assert!(
+        bob.iter().any(|a| matches!(a, Action::Note(_))),
+        "Bob's tap was swallowed by Alice's cooldown: {bob:?}"
     );
-    let (_, bottom) = screen(&actions).expect("a screen");
-    assert_eq!(bottom.chars().count(), COLS);
+}
+
+// ----------------------------------------------------------------- the panel
+
+#[test]
+fn the_panel_says_it_is_working_while_it_waits() {
+    let mut r = reader();
+    let out = r.card(ALICE, 100);
+    assert_eq!(
+        screen(&out),
+        Some(("Checking card".into(), "please wait".into()))
+    );
 }
 
 #[test]
-fn the_panel_is_not_redrawn_when_nothing_changed() {
-    // Three I2C writes per nibble on a PCF8574: redrawing an unchanged screen
-    // every poll would spend the whole budget saying nothing.
+fn a_yes_shows_granted_and_a_no_shows_the_reason() {
     let mut r = reader();
-    let first = r.tick(10);
-    let second = r.tick(20);
-    assert!(
-        !first.iter().any(|a| matches!(a, Action::Show(_)))
-            && !second.iter().any(|a| matches!(a, Action::Show(_))),
-        "an idle tick must not redraw: {first:?} {second:?}"
+    r.card(ALICE, 100);
+    let out = r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    assert_eq!(screen(&out).unwrap().0, "ACCESS GRANTED");
+
+    let mut r = reader();
+    r.card(BOB, 100);
+    let out = r.message(topic::TOOL_ON_RESPONSE, &no("Unknown card"), 200);
+    assert_eq!(
+        screen(&out),
+        Some(("ACCESS DENIED".into(), "Unknown card".into()))
+    );
+}
+
+#[test]
+fn nothing_answering_does_not_blame_the_member() {
+    // A timeout is a no, and a different no from a refusal: the member did
+    // nothing wrong and retrying may work, so it does not say DENIED.
+    let mut r = reader();
+    r.card(ALICE, 100);
+    let out = r.tick(100 + 5_000);
+    assert_eq!(
+        screen(&out),
+        Some(("No answer".into(), "try again".into())),
+        "{out:?}"
     );
 }
 
@@ -431,48 +264,196 @@ fn the_panel_is_not_redrawn_when_nothing_changed() {
 fn an_outcome_is_replaced_by_the_resting_screen_once_it_has_been_read() {
     let mut r = reader();
     r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &yes_for(TOOL), 200);
-    let still = r.tick(200 + SHOW_MS - 1);
-    assert!(
-        !still.iter().any(|a| matches!(a, Action::Show(_))),
-        "the outcome must stay up long enough to read: {still:?}"
-    );
-    let after = r.tick(200 + SHOW_MS);
-    assert_eq!(screen(&after).map(|(t, _)| t), Some("Present card".into()));
+    r.message(topic::TOOL_ON_RESPONSE, &no("Unknown card"), 200);
+    assert_eq!(here(&r).0, "ACCESS DENIED");
+    r.tick(200 + SHOW_MS - 1);
+    assert_eq!(here(&r).0, "ACCESS DENIED", "retired early");
+    r.tick(200 + SHOW_MS);
+    assert_eq!(here(&r).0, "Present card", "the verdict never retired");
 }
 
 #[test]
 fn health_news_does_not_wipe_an_outcome_off_the_panel() {
+    // Wi-Fi flapping while a member is reading their verdict must not take it
+    // away; the panel is the only place the answer appeared.
     let mut r = reader();
     r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &yes_for(TOOL), 200);
-    let actions = r.health(online(), 250);
+    r.message(topic::TOOL_ON_RESPONSE, &no("Training required"), 200);
+    r.health(
+        Health {
+            wifi: false,
+            broker: false,
+            address: None,
+            clock: None,
+        },
+        250,
+    );
+    assert_eq!(here(&r).0, "ACCESS DENIED", "the verdict was overwritten");
+}
+
+#[test]
+fn the_panel_is_not_redrawn_when_nothing_changed() {
+    // A 1602 over a PCF8574 is slow. Redrawing an unchanged screen every poll
+    // would be the whole I2C budget spent saying nothing.
+    let mut r = reader();
+    let first = r.tick(1_000);
+    let second = r.tick(1_100);
     assert!(
-        screen(&actions).is_none(),
-        "a broker reconnect mid-read must not replace ACCESS GRANTED: {actions:?}"
+        !second.iter().any(|a| matches!(a, Action::Show(_))),
+        "redrew an unchanged panel: first={first:?} second={second:?}"
     );
 }
 
 #[test]
 fn the_clock_reaches_the_idle_screen_but_never_a_decision() {
-    let mut r = Reader::new(TOOL);
-    let actions = r.health(
+    let mut r = reader();
+    r.health(
         Health {
-            wifi: true,
-            broker: true,
-            address: Some("192.168.1.50".into()),
             clock: Some("14:05".into()),
+            ..online()
         },
         0,
     );
-    let (top, bottom) = screen(&actions).expect("an idle screen");
-    assert_eq!(top, "Present card");
-    assert_eq!(bottom, "14:05");
+    assert_eq!(here(&r), ("Present card".into(), "14:05".into()));
+    // And it does not leak into a verdict, which has sixteen columns to spend
+    // on the answer.
+    r.card(ALICE, 100);
+    let out = r.message(topic::TOOL_ON_RESPONSE, &no("Unknown card"), 200);
+    assert_eq!(screen(&out).unwrap().1, "Unknown card");
+}
 
-    // And a reader with no clock is still fully usable: the platform's tool
-    // path is measured on a monotonic timer by design, so SNTP never gates a
-    // card.
-    let mut r2 = reader();
-    let sent = published(&r2.card(ALICE, 100), topic::TOOL_ON_REQUEST);
-    assert_eq!(sent.len(), 1, "no wall clock must not stop a swipe");
+// ------------------------------------------------- the session on the panel
+
+#[test]
+fn a_reader_with_no_relay_says_signed_in_rather_than_unlocked() {
+    // It is not what is switching the machine, so it must not imply the tool is
+    // hot. The distinction is the whole reason `Activity` carries `energized`.
+    let mut r = reader();
+    r.card(ALICE, 100);
+    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    r.tick(200 + SHOW_MS);
+    assert_eq!(here(&r), ("Signed in".into(), "Tap to finish".into()));
+}
+
+#[test]
+fn a_reader_that_gates_the_tool_says_unlocked_once_it_really_is() {
+    let mut r = gating_reader();
+    r.card(ALICE, 100);
+    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    // Authorized, but no lease yet: the tool is dark, so the panel must not
+    // claim otherwise.
+    r.tick(200 + SHOW_MS);
+    assert_eq!(here(&r).0, "Signed in", "claimed unlocked before the lease");
+    r.message(topic::LEASE, &lease(600_000), 300 + SHOW_MS);
+    assert_eq!(here(&r).0, "Tool unlocked");
+}
+
+#[test]
+fn a_reader_that_gates_the_tool_drives_the_output() {
+    let mut r = gating_reader();
+    r.card(ALICE, 100);
+    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    let out = r.message(topic::LEASE, &lease(600_000), 300);
+    assert!(
+        out.contains(&Action::Set {
+            output: Output::Tool,
+            on: true
+        }),
+        "the relay was never closed: {out:?}"
+    );
+}
+
+#[test]
+fn a_reader_with_no_relay_drives_no_output() {
+    let mut r = reader();
+    r.card(ALICE, 100);
+    let out = r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    assert!(
+        !out.iter().any(|a| matches!(
+            a,
+            Action::Set {
+                output: Output::Tool,
+                ..
+            }
+        )),
+        "a device with no relay tried to energize a tool: {out:?}"
+    );
+}
+
+#[test]
+fn signing_off_releases_the_tool_and_says_so() {
+    let mut r = reader();
+    r.card(ALICE, 100);
+    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    let out = r.card(ALICE, 100 + SAME_CARD_COOLDOWN_MS + 1);
+    assert_eq!(
+        publishes_to(&out),
+        vec![topic::TOOL_LOG_REQUEST, topic::TOOL_OFF_REQUEST],
+        "a second tap did not release the tool: {out:?}"
+    );
+    assert_eq!(
+        published(&out, topic::TOOL_OFF_REQUEST)[0]["card"],
+        ALICE,
+        "released with the wrong card"
+    );
+    assert_eq!(screen(&out).unwrap().0, "Session ended");
+}
+
+#[test]
+fn a_reader_that_does_not_take_a_second_tap_offers_no_hint_about_one() {
+    // Telling a member to "tap to finish" where it does nothing is worse than
+    // saying nothing: they will tap, nothing will happen, and they will leave.
+    let mut c = Config::switches_nothing(ME, TOOL);
+    c.stop_on_second_tap = false;
+    let mut r = Reader::new(c);
+    r.start(0);
+    r.health(online(), 0);
+    r.card(ALICE, 100);
+    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    r.tick(200 + SHOW_MS);
+    assert_eq!(here(&r), ("Signed in".into(), "".into()));
+}
+
+// --------------------------------------------------------- sixteen columns
+
+#[test]
+fn every_screen_fits_the_panel() {
+    // The constraint the whole display design is built around. A screen that
+    // overflows is not a cosmetic fault: the 1602 wraps to the other line and
+    // the member reads two half sentences.
+    let long = "a reason far longer than the panel can possibly show";
+    let health = Health {
+        wifi: true,
+        broker: true,
+        address: Some("255.255.255.255".into()),
+        clock: Some("23:59".into()),
+    };
+    let screens = [
+        toolguard_core::screen::idle(&health),
+        toolguard_core::screen::asking(),
+        toolguard_core::screen::granted(),
+        toolguard_core::screen::denied(long),
+        toolguard_core::screen::no_answer(),
+        toolguard_core::screen::diagnostics(&health),
+        toolguard_core::screen::in_session(true, true),
+        toolguard_core::screen::in_session(false, false),
+        toolguard_core::screen::ended(),
+    ];
+    for s in screens {
+        for line in s.rows() {
+            assert!(
+                line.chars().count() <= COLS,
+                "{line:?} is {} characters, and the panel has {COLS}",
+                line.chars().count()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_multibyte_reason_is_cut_by_character_and_does_not_panic() {
+    // Truncating by byte would split a UTF-8 sequence and panic on a reason
+    // that happens to contain one. The edge's strings are not ours to predict.
+    let s = toolguard_core::screen::denied("héllo wörld — a very long reason indeed");
+    assert!(s.bottom().chars().count() <= COLS);
 }

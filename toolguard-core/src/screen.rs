@@ -131,6 +131,44 @@ pub fn no_answer() -> Screen {
     Screen::new("No answer", "try again")
 }
 
+/// The resting screen while a member's session is open.
+///
+/// Two things a member needs and neither is the verdict, which has already come
+/// and gone off the panel:
+///
+/// - **whether the tool is actually live.** A device that gates power is
+///   authorized but dark until the edge's lease arrives, and one that switches
+///   nothing never energizes at all. "Signed in" is the honest line in both
+///   cases: the member is through, but this box is not what is switching the
+///   machine, so it must not imply the tool is hot.
+/// - **how to finish**, where a re-tap is what ends the session. On a tool with
+///   no sensor and no relay that is the only stop there is, so a member who is
+///   not told about it leaves the tool `in_use` behind them.
+pub fn in_session(energized: bool, stop_on_second_tap: bool) -> Screen {
+    let top = if energized {
+        "Tool unlocked"
+    } else {
+        "Signed in"
+    };
+    let bottom = if stop_on_second_tap {
+        "Tap to finish"
+    } else {
+        ""
+    };
+    Screen::new(top, bottom)
+}
+
+/// The screen for a session that has just ended, however it ended.
+///
+/// Deliberately does not say why. The reasons are a mix of the ordinary (the
+/// member tapped off) and the diagnostic (`NoFirstLease`, which means this
+/// device is misconfigured), and sixteen columns cannot distinguish them
+/// usefully. The reason is in the log, which the diagnostic screen gives the
+/// address for.
+pub fn ended() -> Screen {
+    Screen::new("Session ended", "")
+}
+
 /// The diagnostic screen: what is up, what is down, and where this device is.
 ///
 /// Shown when the device is not ready, and reachable deliberately at any time —

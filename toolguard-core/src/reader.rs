@@ -1,4 +1,4 @@
-//! The scan state machine, with no hardware and no clock inside it.
+//! What a member sees, over a module that decides what happens.
 //!
 //! Same convention as `spaces_device::module`: every entry point takes the
 //! current monotonic milliseconds, and every effect leaves as an [`Action`] in
@@ -6,25 +6,36 @@
 //! is why a lease expiring, a reply arriving late, and a neighbour's verdict
 //! landing on this device are all testable without a board.
 //!
-//! **Why not `spaces_device::Module`.** That type is a class-1 *power* module:
-//! it is lease-gated, drives a relay, meters a session and heartbeats a power
-//! report. A reader with no relay is never bound in the `power` role, so it is
-//! never leased (`spaces-firmware` docs/FINDINGS.md finding 7 and the
-//! `note_device_seen` ingest), and building on `Module` would land every valid
-//! badge in `EndReason::NoFirstLease` five seconds later. The protocol pieces
-//! are shared instead: the topics, [`ToolRequest`] and [`ToolOnReply`] all come
-//! from `spaces-device`.
+//! **This used to reimplement the protocol, and the reason it did is gone.**
+//! `spaces_device::Module` was a class-1 *power* module: lease-gated,
+//! relay-driving, and it ended any session that got no lease within five
+//! seconds. A reader is never bound in the `power` role, so it is never leased,
+//! so building on `Module` landed every valid badge in
+//! `EndReason::NoFirstLease` and the member watched ACCESS GRANTED turn into a
+//! dead tool. The honest response was a second state machine; it was also two
+//! copies of the rules that decide whether a machine energizes.
 //!
-//! **What a reader is for.** It asks, and it tells the person what the answer
-//! was. Energizing is somebody else's binding — a `power` module on the same
-//! tool — and this device deliberately has no `Output`.
+//! `spaces-device` v0.2.0 separated a *session* from an *energized output*, so
+//! the duplication is no longer the price of being right. `Module` now serves a
+//! device in any role combination, and this type is what it always should have
+//! been: the panel, the card cooldown, and the one decision a reader can make
+//! locally — that it is not connected to anything, so there is no point asking.
+//!
+//! **What belongs here and what does not.** Anything a member reads is here;
+//! anything about whether a machine may run is [`Module`]'s. Keeping the
+//! outcome types (`spaces_device::Outcome`) between them is what stops a panel
+//! from branching on log prose.
 
-use serde_json::json;
-use spaces_device::wire::{topic, ToolOnReply, ToolRequest};
+use spaces_device::{Action as DeviceAction, Activity, Config, Module, Outcome, Output};
 
 use crate::screen::{self, Health, Screen};
 
 /// An effect for the shell to carry out.
+///
+/// The union of what a module decides and what a panel needs. `Set` is here
+/// because this firmware is configurable: the same box may be a reader with no
+/// relay or a reader that also switches the tool, and the shell wires up only
+/// the outputs its hardware has.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Publish `payload` on `topic`.
@@ -32,6 +43,8 @@ pub enum Action {
         topic: &'static str,
         payload: String,
     },
+    /// Drive an output. Only ever emitted for hardware the config claims.
+    Set { output: Output, on: bool },
     /// Put this on the panel until something replaces it.
     Show(Screen),
     /// For the log, and for a human reading it later. Never for the panel: the
@@ -39,12 +52,8 @@ pub enum Action {
     Note(String),
 }
 
-/// How long to wait for the edge before calling it a no.
-///
-/// `FIRMWARE.md`: *"If nothing answers, fail closed; a timeout is a no."*
-pub const REPLY_TIMEOUT_MS: u64 = 5_000;
-
-/// How long an outcome stays on the panel before it returns to idle.
+/// How long an outcome stays on the panel before it returns to the resting
+/// screen.
 pub const SHOW_MS: u64 = 4_000;
 
 /// Ignore the same card presented again inside this window.
@@ -53,44 +62,39 @@ pub const SHOW_MS: u64 = 4_000;
 /// holding theirs against the reader is one tap and not thirty requests. The
 /// driver halts the card as well; this is the second guard, because a tap that
 /// bounces re-enters the field and is a genuinely new detection.
+///
+/// **It bounds a re-tap stop, too.** Where `stop_on_second_tap` is set, the
+/// member's own card ends their session — so without a cooldown a single tap
+/// held half a second would open a session and immediately close it.
 pub const SAME_CARD_COOLDOWN_MS: u64 = 2_000;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Phase {
-    /// Waiting for a card.
-    Idle,
-    /// Asked the edge, waiting for its answer.
-    Asking { card: String, since: u64 },
-    /// Showing an outcome, which replaces itself with idle at `until`.
-    Showing { until: u64 },
-}
-
-/// A badge reader.
+/// A ToolGuard panel: a reader, a display, and whatever else the box has.
 pub struct Reader {
-    tool_id: String,
-    phase: Phase,
+    module: Module,
     health: Health,
-    last_card: Option<(String, u64)>,
     /// The panel's current content, so the shell is only told to redraw when it
     /// actually changes. A 1602 over a PCF8574 is slow — three I2C writes per
     /// nibble — and redrawing an unchanged screen every poll would be the whole
     /// I2C budget spent saying nothing.
     shown: Option<Screen>,
+    /// While an outcome is on the panel, when it stops being.
+    showing_until: Option<u64>,
+    last_card: Option<(String, u64)>,
 }
 
 impl Reader {
-    pub fn new(tool_id: impl Into<String>) -> Self {
+    pub fn new(config: Config) -> Self {
         Reader {
-            tool_id: tool_id.into(),
-            phase: Phase::Idle,
+            module: Module::new(config),
             health: Health::default(),
-            last_card: None,
             shown: None,
+            showing_until: None,
+            last_card: None,
         }
     }
 
     pub fn tool_id(&self) -> &str {
-        &self.tool_id
+        &self.module.config().tool_id
     }
 
     /// True when a card would be acted on rather than refused locally.
@@ -109,24 +113,36 @@ impl Reader {
         self.shown.as_ref()
     }
 
+    /// What the module is doing, for a shell that drives a status light.
+    pub fn activity(&self) -> Activity {
+        self.module.activity()
+    }
+
+    /// Put the outputs in a known state and send the first heartbeat.
+    pub fn start(&mut self, now: u64) -> Vec<Action> {
+        let actions = self.module.start(now);
+        let mut out = self.carry(actions, now);
+        self.refresh(now, &mut out);
+        out
+    }
+
     /// Tell the reader what the shell knows about the network.
     pub fn health(&mut self, health: Health, now: u64) -> Vec<Action> {
-        let mut out = Vec::new();
         self.health = health;
-        self.redraw(now, &mut out);
+        let mut out = Vec::new();
+        self.refresh(now, &mut out);
         out
     }
 
     /// A card was read.
     pub fn card(&mut self, uid: &str, now: u64) -> Vec<Action> {
-        let mut out = Vec::new();
-        self.advance(now, &mut out);
-
-        // A card held against the reader, or a tap that bounced.
+        // A card held against the reader, or a tap that bounced. Answered
+        // before anything else so that neither a request nor a sign-off can be
+        // produced by one finger.
         if let Some((last, at)) = &self.last_card {
             if last == uid && now.saturating_sub(*at) < SAME_CARD_COOLDOWN_MS {
                 self.last_card = Some((uid.to_string(), now));
-                return out;
+                return self.tick(now);
             }
         }
         self.last_card = Some((uid.to_string(), now));
@@ -134,161 +150,116 @@ impl Reader {
         // NOT READY IS ANSWERED HERE AND NOT SENT. Publishing into a broker the
         // device is not connected to would be silently dropped and the member
         // would watch a reader do nothing at all; the diagnostic screen says
-        // which half is missing instead.
+        // which half is missing instead. This is the only decision this type
+        // makes about a card -- everything else is the module's.
         if !self.health.ready() {
+            let mut out = Vec::new();
             out.push(Action::Note(format!(
                 "card {uid} not sent: wifi={} broker={}",
                 self.health.wifi, self.health.broker
             )));
-            self.phase = Phase::Showing {
-                until: now + SHOW_MS,
-            };
-            self.show(screen::diagnostics(&self.health), &mut out);
+            self.hold(screen::diagnostics(&self.health), now, &mut out);
             return out;
         }
 
-        match &self.phase {
-            // A second card while one answer is outstanding. Dropped rather
-            // than queued: the reply carries no card, so two in flight cannot
-            // be told apart, and the second would take the first's answer.
-            Phase::Asking { card, .. } => {
-                out.push(Action::Note(format!(
-                    "card {uid} ignored: still waiting on an answer about {card}"
-                )));
-            }
-            Phase::Idle | Phase::Showing { .. } => {
-                out.push(Action::Note(format!("card {uid} presented")));
-                out.push(Action::Publish {
-                    topic: topic::TOOL_ON_REQUEST,
-                    payload: json!(ToolRequest {
-                        card: uid.to_string(),
-                        tool_id: self.tool_id.clone(),
-                    })
-                    .to_string(),
-                });
-                self.phase = Phase::Asking {
-                    card: uid.to_string(),
-                    since: now,
-                };
-                self.show(screen::asking(), &mut out);
-            }
-        }
+        let actions = self.module.swipe(uid, now);
+        let mut out = self.carry(actions, now);
+        self.refresh(now, &mut out);
+        out
+    }
+
+    /// The machine started or stopped working, as the hardware sees it.
+    pub fn running(&mut self, on: bool, now: u64) -> Vec<Action> {
+        let actions = self.module.running(on, now);
+        let mut out = self.carry(actions, now);
+        self.refresh(now, &mut out);
+        out
+    }
+
+    /// A stop button was pressed.
+    pub fn tool_off(&mut self, now: u64) -> Vec<Action> {
+        let actions = self.module.tool_off(now);
+        let mut out = self.carry(actions, now);
+        self.refresh(now, &mut out);
         out
     }
 
     /// A message arrived on a subscribed topic.
     pub fn message(&mut self, topic_name: &str, payload: &[u8], now: u64) -> Vec<Action> {
-        let mut out = Vec::new();
-        self.advance(now, &mut out);
-        if topic_name == topic::TOOL_ON_RESPONSE {
-            self.on_reply(payload, now, &mut out);
-        }
-        // Every other subscribed topic is somebody else's: a lease is for the
-        // power module, and the acks on tool-off and tool-log answer requests
-        // this device never sends. Silence is correct, not an omission.
+        let actions = self.module.message(topic_name, payload, now);
+        let mut out = self.carry(actions, now);
+        self.refresh(now, &mut out);
         out
     }
 
-    /// Time passed.
+    /// Time passed. Call often: a lease runs out only when something notices.
     pub fn tick(&mut self, now: u64) -> Vec<Action> {
-        let mut out = Vec::new();
-        self.advance(now, &mut out);
+        let actions = self.module.tick(now);
+        let mut out = self.carry(actions, now);
+        self.refresh(now, &mut out);
         out
     }
 
-    fn on_reply(&mut self, payload: &[u8], now: u64, out: &mut Vec<Action>) {
-        let reply: Option<ToolOnReply> = serde_json::from_slice(payload).ok();
+    /// Translate the module's actions, turning its outcomes into screens.
+    fn carry(&mut self, actions: Vec<DeviceAction>, now: u64) -> Vec<Action> {
+        let mut out = Vec::new();
+        for action in actions {
+            match action {
+                DeviceAction::Publish { topic, payload } => {
+                    out.push(Action::Publish { topic, payload })
+                }
+                DeviceAction::Set { output, on } => out.push(Action::Set { output, on }),
+                DeviceAction::Note(text) => out.push(Action::Note(text)),
+                DeviceAction::Outcome(outcome) => {
+                    let screen = match &outcome {
+                        Outcome::Authorized => screen::granted(),
+                        // The edge's own words, truncated to the panel rather
+                        // than matched on. `FIRMWARE.md`: branch on the
+                        // boolean, display the string.
+                        Outcome::Refused(why) => screen::denied(why),
+                        Outcome::NoAnswer => screen::no_answer(),
+                        Outcome::Ended(_) => screen::ended(),
+                    };
+                    out.push(Action::Note(format!("panel: {outcome:?}")));
+                    self.hold(screen, now, &mut out);
+                }
+            }
+        }
+        out
+    }
 
-        // IS IT MINE BEFORE IS IT YES (CS:S #166). Every module on this broker
-        // receives every answer, so a reply about another tool is dropped
-        // without touching the phase: ours may still be in flight, and treating
-        // a neighbour's reply as our refusal would deny this member for
-        // somebody else's swipe. If ours never comes, the timeout is the no.
-        if let Some(r) = &reply {
-            if !r.is_for(&self.tool_id) {
-                out.push(Action::Note(format!(
-                    "ignoring an answer about {} -- this reader asked about {}",
-                    r.tool_id.as_deref().unwrap_or("?"),
-                    self.tool_id
-                )));
+    /// Show a screen and keep it there for [`SHOW_MS`], over whatever the
+    /// resting screen would otherwise be.
+    fn hold(&mut self, screen: Screen, now: u64, out: &mut Vec<Action>) {
+        self.showing_until = Some(now.saturating_add(SHOW_MS));
+        self.show(screen, out);
+    }
+
+    /// Retire an expired outcome, then put the resting screen up.
+    ///
+    /// The resting screen follows the module: waiting for a card, waiting for
+    /// an answer, or in a session. Health only reaches the panel when nothing
+    /// else is on it, so news about the network cannot wipe a verdict the
+    /// member is still reading.
+    fn refresh(&mut self, now: u64, out: &mut Vec<Action>) {
+        if let Some(until) = self.showing_until {
+            if now < until {
                 return;
             }
+            self.showing_until = None;
         }
-
-        let Phase::Asking { card, .. } = &self.phase else {
-            // An answer with nothing outstanding: a late reply to a request
-            // this reader already timed out, or one meant for a neighbour on an
-            // edge too old to echo a tool. Logged, never shown -- the member
-            // standing here did not ask.
-            out.push(Action::Note(
-                "an answer arrived with nothing outstanding; ignored".to_string(),
-            ));
-            return;
-        };
-        let card = card.clone();
-
-        match reply {
-            Some(r) if r.is_yes() => {
-                out.push(Action::Note(format!("card {card} authorized")));
-                self.phase = Phase::Showing {
-                    until: now + SHOW_MS,
-                };
-                self.show(screen::granted(), out);
+        let screen = match self.module.activity() {
+            Activity::Asking => screen::asking(),
+            Activity::Session { energized } => {
+                screen::in_session(energized, self.module.config().stop_on_second_tap)
             }
-            Some(r) => {
-                let why = r.explanation().to_string();
-                out.push(Action::Note(format!("card {card} refused: {why}")));
-                self.phase = Phase::Showing {
-                    until: now + SHOW_MS,
-                };
-                self.show(screen::denied(&why), out);
+            Activity::Idle => {
+                if self.health.ready() {
+                    screen::idle(&self.health)
+                } else {
+                    screen::diagnostics(&self.health)
+                }
             }
-            None => {
-                // Unparseable is a refusal, not an absence: something answered,
-                // and absence of a yes is never permission.
-                out.push(Action::Note(format!(
-                    "card {card} refused: the answer did not parse"
-                )));
-                self.phase = Phase::Showing {
-                    until: now + SHOW_MS,
-                };
-                self.show(screen::denied("bad reply"), out);
-            }
-        }
-    }
-
-    /// Move the clock forward: time out a request, retire a shown outcome.
-    fn advance(&mut self, now: u64, out: &mut Vec<Action>) {
-        match &self.phase {
-            Phase::Asking { card, since } if now.saturating_sub(*since) >= REPLY_TIMEOUT_MS => {
-                out.push(Action::Note(format!(
-                    "card {card}: nothing answered in {REPLY_TIMEOUT_MS} ms, and a timeout is a no"
-                )));
-                self.phase = Phase::Showing {
-                    until: now + SHOW_MS,
-                };
-                self.show(screen::no_answer(), out);
-            }
-            Phase::Showing { until } if now >= *until => {
-                self.phase = Phase::Idle;
-                self.redraw(now, out);
-            }
-            _ => {}
-        }
-    }
-
-    /// Put the resting screen up: idle when ready, diagnostics when not.
-    fn redraw(&mut self, now: u64, out: &mut Vec<Action>) {
-        if let Phase::Showing { .. } | Phase::Asking { .. } = self.phase {
-            // An outcome or a question is on the panel and has not expired;
-            // health news does not get to overwrite it mid-read.
-            let _ = now;
-            return;
-        }
-        let screen = if self.health.ready() {
-            screen::idle(&self.health)
-        } else {
-            screen::diagnostics(&self.health)
         };
         self.show(screen, out);
     }
