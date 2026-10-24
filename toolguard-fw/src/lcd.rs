@@ -101,10 +101,8 @@ pub fn start<'d, I2C: I2c + 'd>(
 /// address or it does not, and nothing is read or written. Harmless to try
 /// against an address with nothing on it.
 fn scan(driver: &mut I2cDriver<'_>, addresses: &[u8]) -> Option<u8> {
-    for &addr in addresses {
-        if driver.write(addr, &[], 100).is_ok() {
-            return Some(addr);
-        }
-    }
-    None
+    addresses
+        .iter()
+        .find(|&&addr| driver.write(addr, &[], 100).is_ok())
+        .copied()
 }

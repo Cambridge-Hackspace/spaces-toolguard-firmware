@@ -66,16 +66,24 @@ jobs:
   # selects it explicitly rather than using rust-toolchain.toml. espup is
   # pinned: 0.18.0 is yanked.
   #
-  # NOT fail-fast with the others and allowed to fail for now, with the reason
-  # stated: no S3 board exists here, the pin map in board.rs is untested, and
-  # whether one toolchain can serve Xtensa and RISC-V in the same checkout is
-  # something Espressif does not document either way. A red cross here means
-  # "the S3 story is unfinished", which is true, and it must not read as "the
-  # firmware is broken" when the C6 and C3 are green.
+  # IT BUILDS, measured 2026-10-24, which settles the question this job was
+  # hedged against. `espup install --targets esp32s3 --std` plus `cargo +esp
+  # build` compiles this firmware for Xtensa, so the `esp` channel does serve a
+  # target upstream rustc cannot reach, and `continue-on-error` is gone: a
+  # failure here is now a real failure.
+  #
+  # WHAT IS STILL UNPROVEN IS THE PIN MAP, not the toolchain. No S3 board exists
+  # here, so board.rs's S3 arm compiles and nothing more. That is a hardware
+  # claim this tier cannot make either way, and it is recorded in the README
+  # rather than as a yellow cross that teaches people to ignore this job.
+  #
+  # Clippy runs here too, and its absence was a real asymmetry: this job passed
+  # the run where the C6 and C3 failed, and it passed because it was the only
+  # one not linting. A weaker gate that reports green next to a red one invites
+  # exactly the wrong conclusion about which chip is healthy.
   xtensa:
-    name: Firmware (esp32s3, unproven)
+    name: Firmware (esp32s3)
     runs-on: ubuntu-24.04
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - run: cargo install ldproxy --locked
@@ -86,11 +94,17 @@ jobs:
         with:
           path: .embuild
           key: embuild-esp32s3-${{ hashFiles('.cargo/config.toml', 'sdkconfig.defaults', 'sdkconfig.defaults.esp32s3') }}
+      # `. $HOME/export-esp.sh` is how espup puts its toolchain on PATH, and
+      # `+esp` selects it over the pinned nightly in rust-toolchain.toml.
+      - name: Lint
+        env:
+          MCU: esp32s3
+        run: |
+          . $HOME/export-esp.sh
+          cargo +esp clippy --workspace --release --target xtensa-esp32s3-espidf -- -D warnings
       - name: Build
         env:
           MCU: esp32s3
-        # `. $HOME/export-esp.sh` is how espup puts its toolchain on PATH, and
-        # `+esp` selects it over the pinned nightly in rust-toolchain.toml.
         run: |
           . $HOME/export-esp.sh
           cargo +esp build --release --target xtensa-esp32s3-espidf
