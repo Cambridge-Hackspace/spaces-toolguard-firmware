@@ -1,0 +1,7 @@
+# Composed ON TOP of sdkconfig.defaults when MCU=esp32s3. esp-idf-sys resolves
+# `<path>`, `<path>.<profile>`, `<path>.<mcu>` and `<path>.<profile>.<mcu>` in
+# increasing specificity, so nothing needs to select this.
+#
+# The S3 has PSRAM on most modules and two cores; neither is required by this
+# firmware, and both are left at the esp-idf defaults deliberately rather than
+# configured blind on a board nobody here has.

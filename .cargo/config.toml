@@ -1,0 +1,38 @@
+# THE CHIP IS CHOSEN IN TWO PLACES AND BOTH MUST AGREE: the target triple and
+# MCU. A triple is not enough -- `riscv32imc-esp-espidf` maps to esp32c3, c2, h2
+# AND c5, and esp-idf-sys picks the FIRST it supports, warning as it goes. So a
+# build with the wrong MCU is a build for a different chip that mostly works.
+#
+# Default here is the C6, the board in hand. The others are driven from the
+# environment, which `scripts/build.sh` does:
+#
+#   esp32c6  riscv32imac-esp-espidf
+#   esp32c3  riscv32imc-esp-espidf
+#   esp32s3  xtensa-esp32s3-espidf    <- Xtensa: needs espup's `esp` toolchain
+#
+[build]
+target = "riscv32imac-esp-espidf"
+
+# One section per triple rather than `cfg(target_os = "espidf")`, so that the
+# runner is only wired up for the chip this checkout defaults to. Flashing the
+# wrong chip's image is a worse outcome than `cargo run` not working.
+[target.riscv32imac-esp-espidf]
+linker = "ldproxy"
+runner = "scripts/cargo-runner.sh"
+rustflags = ["--cfg", "espidf_time64"]
+
+[target.riscv32imc-esp-espidf]
+linker = "ldproxy"
+rustflags = ["--cfg", "espidf_time64"]
+
+[target.xtensa-esp32s3-espidf]
+linker = "ldproxy"
+rustflags = ["--cfg", "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32c6"
+ESP_IDF_VERSION = "v5.5.3"
+ESP_IDF_TOOLS_INSTALL_DIR = "workspace"

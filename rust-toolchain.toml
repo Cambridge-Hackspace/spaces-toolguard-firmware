@@ -1,0 +1,18 @@
+# Upstream nightly, which covers the two RISC-V chips: the C6
+# (riscv32imac-esp-espidf) and the C3 (riscv32imc-esp-espidf). Nightly is
+# required only because the target's standard library is built from source
+# (`build-std` in .cargo/config.toml), not for any language feature.
+#
+# Pinned to a date so a build today and a build next month use the same
+# compiler. rust-lang/rust#164177 was an ICE building `std` for
+# riscv32imac-esp-espidf that stood for eight days in October 2026; a floating
+# nightly would have taken it.
+#
+# THE S3 IS NOT COVERED BY THIS FILE. Xtensa does not exist in upstream rustc at
+# all -- its codegen lives only in Espressif's LLVM fork -- so an S3 build needs
+# espup's `esp` channel instead, which the CI job for it installs and selects
+# explicitly. Keeping this file on nightly means the C6 and C3 do not pay for
+# the S3's forked compiler.
+[toolchain]
+channel = "nightly-2026-05-23"
+components = ["rust-src", "rustfmt", "clippy"]

@@ -1,8 +1,11 @@
 [workspace]
 resolver = "2"
-# toolguard-fw joins here when it exists; the core lands first because it is
-# the half this workstation can actually compile and test.
-members = ["toolguard-core"]
+members = ["toolguard-core", "toolguard-fw"]
+# `cargo build` with no -p means the firmware. The core is built for the host
+# with an explicit -p and --target, which is the only thing this workstation
+# can do: there is no rustup here, so the pinned nightly cannot be selected and
+# `build-std` has no nightly to use, and ldproxy is absent.
+default-members = ["toolguard-fw"]
 
 [workspace.package]
 version = "0.1.0"

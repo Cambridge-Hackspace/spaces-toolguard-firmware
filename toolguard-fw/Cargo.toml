@@ -1,0 +1,34 @@
+[package]
+name = "toolguard-fw"
+description = "ToolGuard badge reader firmware for ESP32-C6, C3 and S3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "toolguard-fw"
+# The esp32 target has no test harness.
+test = false
+
+[dependencies]
+toolguard-core.workspace = true
+spaces-device.workspace = true
+spaces-device-espidf.workspace = true
+esp-idf-svc.workspace = true
+log.workspace = true
+anyhow = "1"
+# embedded-hal 1.0 native, and esp-idf-hal's SpiDeviceDriver implements
+# embedded_hal::spi::SpiDevice, so no embedded-hal-bus and no compat shim.
+mfrc522 = "0.8"
+# For board::SPI_MODE. esp-idf-hal implements both embedded-hal generations and
+# mfrc522 is eh1-native, so this is the same version they already agree on.
+embedded-hal = "1"
+# eh1, supports the PCF8574 4-bit backpack explicitly, and has Lcd16x2 as a
+# first-class display type. NOT hd44780-driver: its published 0.4.0 is
+# embedded-hal 0.2 from 2020 and only its unpublished git master is eh1.
+i2c-character-display = "0.6"
+
+[build-dependencies]
+embuild.workspace = true

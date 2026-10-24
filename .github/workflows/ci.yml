@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The half that can be tested rather than only compiled. Everything about a
+  # card's fate and about what a member reads off the panel is decided here, so
+  # this job is the one that can fail for a reason that matters.
+  core:
+    name: Reader core (host)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Lint
+        # --all-targets so the tests are linted too; without it the largest
+        # body of code in this crate is unlinted.
+        run: cargo clippy -p toolguard-core --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test -p toolguard-core --target x86_64-unknown-linux-gnu
+
+  # THE RISC-V CHIPS, on upstream nightly. rust-toolchain.toml pins the date.
+  #
+  # Both are built because nothing may silently hardcode the C6: the board in
+  # hand is a C6, so a C3 assumption would go unnoticed until somebody picks up
+  # the other board. MCU is set per chip and is NOT optional -- a triple alone
+  # is ambiguous (riscv32imc maps to c3, c2, h2 and c5) and esp-idf-sys picks
+  # the first it supports.
+  riscv:
+    name: Firmware (${{ matrix.mcu }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mcu: esp32c6
+            target: riscv32imac-esp-espidf
+          - mcu: esp32c3
+            target: riscv32imc-esp-espidf
+    steps:
+      - uses: actions/checkout@v7
+      - run: cargo install ldproxy --locked
+      - uses: actions/cache@v6
+        with:
+          path: .embuild
+          key: embuild-${{ matrix.mcu }}-${{ hashFiles('.cargo/config.toml', 'sdkconfig.defaults', 'partitions.csv') }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Lint
+        env:
+          MCU: ${{ matrix.mcu }}
+        run: cargo clippy --workspace --release --target ${{ matrix.target }} -- -D warnings
+      - name: Build
+        env:
+          MCU: ${{ matrix.mcu }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+  # THE S3, which is Xtensa and therefore a different compiler.
+  #
+  # Xtensa does not exist in upstream rustc at all -- its codegen lives only in
+  # Espressif's LLVM fork -- so this job installs espup's `esp` channel and
+  # selects it explicitly rather than using rust-toolchain.toml. espup is
+  # pinned: 0.18.0 is yanked.
+  #
+  # NOT fail-fast with the others and allowed to fail for now, with the reason
+  # stated: no S3 board exists here, the pin map in board.rs is untested, and
+  # whether one toolchain can serve Xtensa and RISC-V in the same checkout is
+  # something Espressif does not document either way. A red cross here means
+  # "the S3 story is unfinished", which is true, and it must not read as "the
+  # firmware is broken" when the C6 and C3 are green.
+  xtensa:
+    name: Firmware (esp32s3, unproven)
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - run: cargo install ldproxy --locked
+      - run: cargo install espup --locked --version 0.17.1
+      - name: Install the esp toolchain
+        run: espup install --targets esp32s3 --std
+      - uses: actions/cache@v6
+        with:
+          path: .embuild
+          key: embuild-esp32s3-${{ hashFiles('.cargo/config.toml', 'sdkconfig.defaults', 'sdkconfig.defaults.esp32s3') }}
+      - name: Build
+        env:
+          MCU: esp32s3
+        # `. $HOME/export-esp.sh` is how espup puts its toolchain on PATH, and
+        # `+esp` selects it over the pinned nightly in rust-toolchain.toml.
+        run: |
+          . $HOME/export-esp.sh
+          cargo +esp build --release --target xtensa-esp32s3-espidf
