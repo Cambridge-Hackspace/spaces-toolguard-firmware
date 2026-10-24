@@ -26,7 +26,6 @@ use anyhow::{anyhow, Context};
 use esp_idf_svc::hal::delay::Delay;
 use esp_idf_svc::hal::gpio::{InputPin, OutputPin};
 use esp_idf_svc::hal::i2c::{I2c, I2cConfig, I2cDriver};
-use esp_idf_svc::hal::peripheral::Peripheral;
 use esp_idf_svc::hal::units::FromValueType as _;
 use i2c_character_display::{CharacterDisplayPCF8574T, LcdDisplayType};
 use toolguard_core::Screen;
@@ -62,10 +61,10 @@ impl Panel<'_> {
 }
 
 /// Bring the bus up, find the backpack, and initialise the panel.
-pub fn start<'d>(
-    i2c: impl Peripheral<P = impl I2c> + 'd,
-    sda: impl Peripheral<P = impl InputPin + OutputPin> + 'd,
-    scl: impl Peripheral<P = impl InputPin + OutputPin> + 'd,
+pub fn start<'d, I2C: I2c + 'd>(
+    i2c: I2C,
+    sda: impl InputPin + OutputPin + 'd,
+    scl: impl InputPin + OutputPin + 'd,
     addresses: &[u8],
 ) -> anyhow::Result<Panel<'d>> {
     // 100 kHz: the PCF8574 is a standard-mode part and the HD44780 behind it is

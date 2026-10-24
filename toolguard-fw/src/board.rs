@@ -29,11 +29,14 @@
 
 //! ## Where the pins actually are
 //!
-//! Not here, and that is forced rather than chosen: `esp-idf-hal` takes pins as
-//! CONCRETE types behind generic bounds (`impl Peripheral<P = impl InputPin +
-//! OutputPin>`), which is also how `spaces-device-espidf` takes them. A runtime
-//! struct of GPIO numbers would have to be erased to `AnyIOPin` to fit in one,
-//! losing exactly the compile-time check that stops a pin being used twice.
+//! Not here, and that is forced rather than chosen: `esp-idf-hal` 0.47 takes
+//! pins as CONCRETE types behind plain bounds — `sclk: impl OutputPin + 'd`,
+//! `sda: impl InputPin + OutputPin + 'd` — which is also how
+//! `spaces-device-espidf` takes them (`impl OutputPin + Send + 'static`). A
+//! runtime struct of GPIO numbers would have to be erased to `AnyIOPin` to fit
+//! one, losing exactly the compile-time check that stops a pin being used
+//! twice — and that check is what caught the S3 using GPIO8 for the LED and
+//! for I2C SDA.
 //!
 //! So the assignment lives in `main.rs` as a `cfg`-gated tuple, one arm per
 //! chip, and this module holds the reasoning plus the settings that are not

@@ -30,7 +30,6 @@
 
 use anyhow::Context;
 use esp_idf_svc::hal::gpio::{InputPin, Output, OutputPin, PinDriver};
-use esp_idf_svc::hal::peripheral::Peripheral;
 use esp_idf_svc::hal::spi::config::{Config as SpiConfig, DriverConfig};
 use esp_idf_svc::hal::spi::{SpiAnyPins, SpiDeviceDriver, SpiDriver};
 use esp_idf_svc::hal::units::Hertz;
@@ -40,14 +39,18 @@ use mfrc522::{Initialized, Mfrc522};
 use crate::board;
 
 /// A reader that has answered with a plausible version byte.
-pub struct Reader<'d, RST: OutputPin> {
+pub struct Reader<'d> {
     mfrc522: Mfrc522<SpiInterface<SpiDeviceDriver<'d, SpiDriver<'d>>, DummyDelay>, Initialized>,
     /// Held for the program's lifetime: dropping it would let RST fall and put
     /// the module back into power-down.
-    _rst: PinDriver<'d, RST, Output>,
+    ///
+    /// `PinDriver<'d, MODE>` carries only the mode in esp-idf-hal 0.47 -- the
+    /// pin type is erased by the constructor -- so this needs no generic for
+    /// which pin it is.
+    _rst: PinDriver<'d, Output>,
 }
 
-impl<RST: OutputPin> Reader<'_, RST> {
+impl Reader<'_> {
     /// Poll once. `Some(uid)` only for a card that has just entered the field.
     ///
     /// REQA is answered only by cards in IDLE, so a card that was read and then
@@ -72,14 +75,14 @@ impl<RST: OutputPin> Reader<'_, RST> {
 /// cannot be reached is the whole function of this device missing, and the
 /// caller shows it on the panel instead of idling as though it were waiting for
 /// a card.
-pub fn start<'d, SPI: SpiAnyPins + 'd, RST: OutputPin>(
-    spi: impl Peripheral<P = SPI> + 'd,
-    sclk: impl Peripheral<P = impl OutputPin> + 'd,
-    mosi: impl Peripheral<P = impl OutputPin> + 'd,
-    miso: impl Peripheral<P = impl InputPin> + 'd,
-    cs: impl Peripheral<P = impl OutputPin> + 'd,
-    rst: impl Peripheral<P = RST> + 'd,
-) -> anyhow::Result<Reader<'d, RST>> {
+pub fn start<'d, SPI: SpiAnyPins + 'd>(
+    spi: SPI,
+    sclk: impl OutputPin + 'd,
+    mosi: impl OutputPin + 'd,
+    miso: impl InputPin + 'd,
+    cs: impl OutputPin + 'd,
+    rst: impl OutputPin + 'd,
+) -> anyhow::Result<Reader<'d>> {
     // RST high FIRST and kept: the MFRC522 is in power-down until it is, and a
     // bus brought up against a sleeping chip reads zeros that look like a wiring
     // fault.
