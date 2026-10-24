@@ -83,6 +83,12 @@ RISC-V pair on plain nightly, so the C6 and C3 do not pay for a forked compiler.
 
 ## Wiring
 
+**If you are installing one of these on a machine, read
+[`docs/INSTALLING.md`](docs/INSTALLING.md) instead of this section.** It covers
+the safety, the three things you have to measure on your own machine before
+wiring anything, both wiring modes, commissioning in order, and what to do when
+it does not work. This section is the summary.
+
 Seven pins always: SPI (SCLK, MOSI, MISO, CS) plus RST for the RC522, and
 SDA/SCL for the panel. Two more are used only by the roles that need them —
 a **sense** input for a box that watches the machine, and a **relay** output for
