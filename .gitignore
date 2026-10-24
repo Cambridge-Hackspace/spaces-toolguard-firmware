@@ -1,0 +1,5 @@
+/target
+/.embuild
+/components_esp32*.lock
+sdkconfig.old
+/.ota-host

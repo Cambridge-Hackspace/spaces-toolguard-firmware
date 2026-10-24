@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+# toolguard-fw joins here when it exists; the core lands first because it is
+# the half this workstation can actually compile and test.
+members = ["toolguard-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/Cambridge-Hackspace/spaces-toolguard-firmware"
+rust-version = "1.85"
+
+[workspace.dependencies]
+toolguard-core = { path = "toolguard-core" }
+# The protocol core and its ESP-IDF shell, pinned to a TAG and not a rev.
+# nfc-522 pinned esp-idf-sys/hal/svc at git master through [patch.crates-io]
+# and its builds changed underneath it; a tag is the fix, and v0.1.0 exists for
+# exactly this.
+spaces-device = { git = "https://github.com/Cambridge-Hackspace/spaces-firmware", tag = "v0.1.0" }
+spaces-device-espidf = { git = "https://github.com/Cambridge-Hackspace/spaces-firmware", tag = "v0.1.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+esp-idf-svc = "0.53"
+embuild = "0.33"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[profile.dev]
+# Symbols cost nothing on flash and make a crash backtrace readable.
+debug = true
+opt-level = "z"
