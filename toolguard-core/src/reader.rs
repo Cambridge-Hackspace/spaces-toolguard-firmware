@@ -250,9 +250,11 @@ impl Reader {
         }
         let screen = match self.module.activity() {
             Activity::Asking => screen::asking(),
-            Activity::Session { energized } => {
-                screen::in_session(energized, self.module.config().stop_on_second_tap)
-            }
+            Activity::Session { energized } => screen::in_session(
+                energized,
+                self.module.config().stop_on_second_tap,
+                self.module.usage(now),
+            ),
             Activity::Idle => {
                 if self.health.ready() {
                     screen::idle(&self.health)

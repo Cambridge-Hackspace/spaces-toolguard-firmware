@@ -19,7 +19,7 @@
 //! reading. What is left is what this crate actually decides.
 
 use spaces_device::wire::topic;
-use spaces_device::Output;
+use spaces_device::{Output, Usage};
 use toolguard_core::reader::{Action, Reader, SAME_CARD_COOLDOWN_MS, SHOW_MS};
 use toolguard_core::screen::{Health, COLS};
 use toolguard_core::Config;
@@ -374,6 +374,56 @@ fn a_reader_that_gates_the_tool_says_unlocked_once_it_really_is() {
 }
 
 #[test]
+fn a_sensing_reader_shows_the_meter_and_whether_it_is_climbing() {
+    // The visuals must be truthful about money: a member billed by the second
+    // sees the figure, and sees it stop when the machine does. The figure is
+    // the module's held one (its own arms pin the bridging); this proves the
+    // panel renders it and does not flicker on a pause the bill bridges.
+    let mut c = Config::switches_nothing(ME, TOOL);
+    c.senses_running = true;
+    c.use_hold_ms = 2_000;
+    let mut r = Reader::new(c);
+    r.start(0);
+    r.health(online(), 0);
+    r.card(ALICE, 100);
+    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    r.tick(200 + SHOW_MS);
+    assert_eq!(here(&r), ("Signed in".into(), "Idle     0:00:00".into()));
+
+    let t0 = 1_000 + SHOW_MS;
+    r.running(true, t0);
+    r.tick(t0 + 65_000);
+    assert_eq!(here(&r).1, "In use   0:01:05");
+
+    // Raw drops; inside the hold the panel still says in use.
+    r.running(false, t0 + 65_000);
+    r.tick(t0 + 66_000);
+    assert_eq!(
+        here(&r).1,
+        "In use   0:01:06",
+        "flickered on a bridged pause"
+    );
+    // Past it: idle, and the figure stays where the bridge ended. The release
+    // is noticed on a tick (the box polls every 75 ms), so poll the boundary.
+    r.tick(t0 + 67_000);
+    r.tick(t0 + 70_000);
+    assert_eq!(here(&r).1, "Idle     0:01:07");
+    r.tick(t0 + 90_000);
+    assert_eq!(here(&r).1, "Idle     0:01:07", "idle time was counted");
+}
+
+#[test]
+fn a_reader_that_senses_nothing_shows_no_figure() {
+    // Its bottom line is still the re-tap hint: with no sensor and no relay a
+    // second tap is the only stop, and inventing a meter would hide that.
+    let mut r = reader();
+    r.card(ALICE, 100);
+    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    r.tick(200 + SHOW_MS + 30_000);
+    assert_eq!(here(&r), ("Signed in".into(), "Tap to finish".into()));
+}
+
+#[test]
 fn a_reader_that_gates_the_tool_drives_the_output() {
     let mut r = gating_reader();
     r.card(ALICE, 100);
@@ -460,8 +510,26 @@ fn every_screen_fits_the_panel() {
         toolguard_core::screen::denied(long),
         toolguard_core::screen::no_answer(),
         toolguard_core::screen::diagnostics(&health),
-        toolguard_core::screen::in_session(true, true),
-        toolguard_core::screen::in_session(false, false),
+        toolguard_core::screen::in_session(true, true, None),
+        toolguard_core::screen::in_session(false, false, None),
+        // 99:59:59 running, and idle: the widest the figure gets in a session
+        // any cap allows.
+        toolguard_core::screen::in_session(
+            true,
+            true,
+            Some(Usage {
+                running: true,
+                seconds: 359_999,
+            }),
+        ),
+        toolguard_core::screen::in_session(
+            false,
+            false,
+            Some(Usage {
+                running: false,
+                seconds: 0,
+            }),
+        ),
         toolguard_core::screen::ended(),
     ];
     for s in screens {

@@ -333,7 +333,12 @@ the roles it actually claims:
    scanned, and the parts look identical.
 7. **Swipe a known-good card** and watch the panel: `Checking card` →
    `ACCESS GRANTED` → `Signed in`. In gating mode it should read
-   `Tool unlocked` once the lease arrives.
+   `Tool unlocked` once the lease arrives. With "Senses the machine" on, the
+   bottom line is the meter -- `Idle     0:00:00` until the machine works,
+   then `In use   0:00:07` climbing -- and it is the same figure the box
+   reports, so a member can check what they are being billed. Without a
+   sensor the bottom line is the `Tap to finish` hint instead; a box that
+   measures nothing shows no figure.
 8. **Swipe again** and confirm `Session ended`, if "Tap again to finish" is on.
 9. **In gating mode, test the fail-safe with the tube disconnected** (§4b).
 10. **Fire a real job** and check the reported usage against the clock. This is

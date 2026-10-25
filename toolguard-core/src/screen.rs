@@ -17,6 +17,7 @@
 //! A reader who needs the exact string has somewhere to get it.
 
 /// The panel's shape. Not configurable: the hardware is a 1602.
+use spaces_device::Usage;
 pub const COLS: usize = 16;
 pub const ROWS: usize = 2;
 
@@ -144,18 +145,37 @@ pub fn no_answer() -> Screen {
 /// - **how to finish**, where a re-tap is what ends the session. On a tool with
 ///   no sensor and no relay that is the only stop there is, so a member who is
 ///   not told about it leaves the tool `in_use` behind them.
-pub fn in_session(energized: bool, stop_on_second_tap: bool) -> Screen {
+/// - **what the meter says**, on a box that senses the machine. A member
+///   billed by the second gets the figure, live, with whether it is climbing:
+///   `In use   0:12:34` or `Idle     0:12:34`. It is the held figure -- what
+///   `tool-log` reports as `seconds` -- so it does not flicker on a laser's
+///   scan-line returns. It takes the bottom line from the re-tap hint, which
+///   on a sensing tool is not the only stop there is.
+pub fn in_session(energized: bool, stop_on_second_tap: bool, usage: Option<Usage>) -> Screen {
     let top = if energized {
         "Tool unlocked"
     } else {
         "Signed in"
     };
-    let bottom = if stop_on_second_tap {
-        "Tap to finish"
-    } else {
-        ""
+    let bottom = match usage {
+        Some(u) => {
+            let state = if u.running { "In use" } else { "Idle" };
+            format!("{state:<6} {:>9}", hms(u.seconds))
+        }
+        None if stop_on_second_tap => "Tap to finish".to_string(),
+        None => String::new(),
     };
-    Screen::new(top, bottom)
+    Screen::new(top, &bottom)
+}
+
+/// `h:mm:ss`, hours unbounded, for the usage figure.
+fn hms(seconds: u64) -> String {
+    format!(
+        "{}:{:02}:{:02}",
+        seconds / 3600,
+        (seconds / 60) % 60,
+        seconds % 60
+    )
 }
 
 /// The screen for a session that has just ended, however it ended.
