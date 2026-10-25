@@ -300,10 +300,30 @@ after a firmware update rather than dropping into its portal.
 | Finish after idle (s) | 0 (never) | needs a sensor; ignored without one |
 | Longest session (s) | 0 (none) | the walk-away backstop |
 | Report usage every (s) | 30 | usage is sent in increments, so a reboot costs one interval |
+| Reports usage | yes | `no` for a box that must not meter — see "A second plug on the same tool" below. Nothing else changes |
 
 Yes/no fields accept `yes`/`no`, `y`/`n`, `true`/`false`, `1`/`0`, `on`/`off`.
 **Anything unrecognised uses the default and logs a warning** — a typo does not
 quietly turn an output on or off.
+
+#### A second plug on the same tool
+
+A tool may have more than one box switching power — an extractor fan on its own
+circuit that must run whenever the laser does. Bind the second box to the same
+tool in the `power` role: the edge leases every `power` binding on a tool, so
+both follow the same session and switch within a poll of each other. Two
+things to set:
+
+- **"Reports usage" = `no` on the second box.** A box that switches power
+  reports the time the power was on; two of them would report the same minutes
+  twice, and reports accumulate.
+- **Decide its "On disconnect"** in Tool Wiring. The default `fail_off` means a
+  silent extractor plug withholds the laser's lease too — no laser without the
+  filter — which may be exactly what you want. `ignore` lets the laser run
+  without it.
+
+The two switch together, not in order: the platform does not yet sequence
+leases, so "filter on before the laser, off after" is not something to rely on.
 
 #### Three that are easy to get wrong
 

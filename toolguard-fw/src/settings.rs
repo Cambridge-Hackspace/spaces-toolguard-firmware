@@ -38,6 +38,7 @@ pub mod key {
     pub const MAX_SESS_S: &str = "max_sess_s";
     pub const USAGE_INT_S: &str = "usage_int_s";
     pub const STOP_BTN: &str = "stop_button";
+    pub const REPORTS_USAGE: &str = "report_usage";
 }
 
 /// The settings this firmware adds to the shared set, in the order they are
@@ -131,6 +132,15 @@ pub const FIELDS: &[Field] = &[
         required: false,
     },
     Field {
+        key: key::REPORTS_USAGE,
+        label: "Reports usage",
+        hint: "yes (default). no for a box that must not meter: a second plug on a tool \
+               another device already meters -- an extractor that follows the laser -- \
+               would count the same minutes twice. Everything else is unchanged",
+        secret: false,
+        required: false,
+    },
+    Field {
         key: key::USAGE_INT_S,
         label: "Report usage every (s)",
         hint: "30 (default). Usage is sent in increments, so a reboot mid-session costs one \
@@ -178,6 +188,7 @@ impl Settings {
         config.idle_end_ms = secs_ms(store, key::IDLE_END_S, 0);
         config.max_session_ms = secs_ms(store, key::MAX_SESS_S, 0);
         config.usage_interval_ms = secs_ms(store, key::USAGE_INT_S, 30);
+        config.reports_usage = flag(store, key::REPORTS_USAGE, true);
         // Defaults to on for a box that cannot stop a session any other way,
         // and off for one that can: where a lease lapses or a relay opens, a
         // re-tap meaning "done" would surprise somebody who simply swiped
@@ -222,7 +233,7 @@ impl Settings {
         format!(
             "reads_cards={} gates_power={} senses_running={} (active {}) \
              hold={}ms assert={}ms stop_2tap={} idle_end={}ms max_session={}ms usage_every={}ms \
-             stop_button={}",
+             reports_usage={} stop_button={}",
             self.config.reads_cards,
             self.config.gates_power,
             self.config.senses_running,
@@ -233,6 +244,7 @@ impl Settings {
             self.config.idle_end_ms,
             self.config.max_session_ms,
             self.config.usage_interval_ms,
+            self.config.reports_usage,
             self.stop_button,
         )
     }
