@@ -270,7 +270,7 @@ after a firmware update rather than dropping into its portal.
 |---|---|---|
 | Has a card reader | yes | `no` makes this a plug: it switches the tool on the edge's lease and never reads a badge |
 | Switches the tool | **no** | `yes` drives the relay — and registers this device in the `power` role |
-| Senses the machine | **no** | `yes` reads the sense pin and reports working time |
+| Senses the machine | **no** | `yes` reads the sense pin and reports working time. Without one, a box that switches the tool reports the time the power was on; a box that does neither reports no time |
 | Sense is active low | yes | match §3. Wrong = usage recorded when the machine is idle |
 | Bridge gaps (seconds) | 10 | how long the machine may pause and still count as working. See §2c |
 | Ignore blips under (ms) | 100 | the signal must hold this long to count |
@@ -384,8 +384,8 @@ Two consequences worth knowing:
 | Panel reads `No edge` | Wi-Fi is up, the local broker is not. Check the broker address and that the edge is running |
 | Every card is `ACCESS DENIED` with a credential-shaped reason | the device is not bound to the tool. Step 4 |
 | Panel goes `ACCESS GRANTED` then `Session ended` a few seconds later | configured as switching the tool but not bound in the `power` role, so no lease ever arrives. The log says `is this module bound in the power role?` |
-| Tool stays "in use" after a member leaves | nothing closed the session. Turn on "Tap again to finish", or set a session cap, or both |
-| A member is billed nothing for a long job | usage was never reported. Check "Senses the machine" is on, the sense polarity, and the job against §2c |
+| Tool stays "in use" after a member leaves | nothing closed the session. Turn on "Tap again to finish", or set a session cap, or both. The server does eventually release it -- once the tool's session cap plus a grace has run out, hours at the defaults -- and raises a Warning-severity `tool_released_by_sweep` event when it does. That is a net for a crashed box, not a way to run one |
+| A member is billed nothing for a long job | usage was never reported. On a box that switches the tool, check it is bound in the `power` role and the lease arrives (the figure is the time the power was on). On a box that only senses, check "Senses the machine" is on, the sense polarity, and the job against §2c. A box that does neither has no figure to report |
 | Usage is a fraction of the real time | "Bridge gaps" is shorter than the machine's pauses. §2c |
 | Usage counts time the machine was idle | sense polarity is inverted. §3 |
 | No card is ever detected, version register fine | SPI mode. §5 |
