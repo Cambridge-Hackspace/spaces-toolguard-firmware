@@ -1258,8 +1258,8 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "spaces-device"
-version = "0.3.2"
-source = "git+https://github.com/Cambridge-Hackspace/spaces-firmware?tag=v0.3.2#f3c2fc96c0d0e7cce4093c61c0fc614a2c89e9a8"
+version = "0.3.3"
+source = "git+https://github.com/Cambridge-Hackspace/spaces-firmware?tag=v0.3.3#febbc02ebe35c871981dfbb8517e252fcaf51749"
 dependencies = [
  "serde",
  "serde_json",
@@ -1267,8 +1267,8 @@ dependencies = [
 
 [[package]]
 name = "spaces-device-espidf"
-version = "0.3.2"
-source = "git+https://github.com/Cambridge-Hackspace/spaces-firmware?tag=v0.3.2#f3c2fc96c0d0e7cce4093c61c0fc614a2c89e9a8"
+version = "0.3.3"
+source = "git+https://github.com/Cambridge-Hackspace/spaces-firmware?tag=v0.3.3#febbc02ebe35c871981dfbb8517e252fcaf51749"
 dependencies = [
  "anyhow",
  "embedded-svc",

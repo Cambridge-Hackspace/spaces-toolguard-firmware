@@ -37,7 +37,7 @@ included, which goes through this firmware, a lease and a Wi-Fi link.
 
 The protocol is not redefined here. `Module`, the topics and the wire types come
 from [`spaces-firmware`][sf]'s `spaces-device`, pinned by tag in `Cargo.toml`
-(currently `v0.3.2`), so this box and every other module speak the same wire by
+(currently `v0.3.3`), so this box and every other module speak the same wire by
 construction.
 
 ## The panel is sixteen columns, and that is a design constraint

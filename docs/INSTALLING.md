@@ -183,7 +183,9 @@ button at all — reads as "not pressed". Turn on "Has a stop button" in §6.
 
 Pressing it **ends the session**: usage reported, the tool released on the
 platform, and in gating mode the relay opens within one poll (under 100 ms). It
-needs no card. That is deliberate and matches the platform's rule — *anyone may
+needs no card — and that holds on a **plug** too (a box with no card reader):
+its stop names the tool alone, the platform ends whatever session is open
+there, and the plug switches off when its lease is withdrawn. That is deliberate and matches the platform's rule — *anyone may
 cut the power* — so a member's colleague, or a passer-by who sees something
 wrong, can stop the job without finding the member. The session is still closed
 under the card that opened it, because that is who the usage belongs to.
