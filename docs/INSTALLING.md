@@ -340,21 +340,30 @@ the roles it actually claims:
     where a wrong "Bridge gaps" shows up: far too little usage means the bridge
     is shorter than the machine's pauses.
 
-### On liveness, and why this box is not caught by it
+### On liveness, and what this box says about itself
 
-The platform will refuse a tool its lease if a device bound to it has gone
-silent, and the default for a new binding is `fail_off` — the strict one. The
-only thing that counts as "not silent" on the local broker is a power report.
+The platform listens for every device bound to a tool, and a binding's
+**"On disconnect"** setting says what a device going quiet does to that tool:
 
-**This firmware sends one in every configuration**, including when it has no
-relay (with the draw and relay fields null, because it cannot honestly report
-them). So it credits itself and the strict default is safe to leave alone.
+| role | default | why |
+|---|---|---|
+| `power` | `fail_off` | a silent plug is an unobserved circuit, so the lease is refused |
+| `sensor` | `fail_off` | a silent sensor is an unobserved machine, same reason |
+| `reader` | `ignore` | a dead reader cannot produce a swipe, so there is nothing to protect against, and it is no reason to stop a job already running |
+
+**This firmware says it is alive in every configuration**, on the heartbeat
+timer, by two messages: a power report (with the draw and relay fields null when
+it has no relay, because it cannot honestly report them) and an *alive* pulse
+that carries its device id and nothing else. The pulse is what the platform
+counts, whatever the role, and it also reaches the server, so a reader that
+dies shows up as silent on the admin device list even though the tool is not
+withheld over it. The defaults above are therefore safe to leave alone.
 
 Two consequences worth knowing:
 
-- Firmware that does *not* heartbeat will be refused a lease forever if bound
-  with the default. That is not this firmware, but it may be another device on
-  the same tool.
+- Firmware that sends *neither* message will be refused a lease forever if bound
+  as `power` or `sensor` with the default. That is not this firmware, but it may
+  be another device on the same tool.
 - The binding has to exist first. Until it does, the edge logs that the report
   *"matched no module binding; it will be refused a lease until its wiring
   arrives."* That message means step 4 has not been done, not that anything is

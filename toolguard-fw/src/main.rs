@@ -303,8 +303,8 @@ fn main() -> anyhow::Result<()> {
     // is actually missing.
     let mut broker_up = false;
     // `start` first: it puts the outputs in a known state and sends the first
-    // heartbeat, which is the only thing that credits this device with being
-    // alive on the local broker.
+    // heartbeats -- the power report and the alive pulse -- which are what
+    // credit this device with being alive on the local broker.
     apply(reader.start(now()), &mut panel, &mut client, &mut relay);
     apply(
         reader.health(health(&address, broker_up), now()),

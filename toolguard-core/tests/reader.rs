@@ -73,7 +73,10 @@ fn publishes_to(actions: &[Action]) -> Vec<&'static str> {
             Action::Publish { topic, .. } => Some(*topic),
             _ => None,
         })
-        .filter(|t| *t != topic::POWER_REPORT)
+        // Both heartbeats are filtered out, so assertions about the protocol's
+        // decisions are not drowned by the two messages every tick sends. The
+        // heartbeats have their own arm below.
+        .filter(|t| *t != topic::POWER_REPORT && *t != topic::ALIVE_REQUEST)
         .collect()
 }
 
@@ -320,6 +323,28 @@ fn the_clock_reaches_the_idle_screen_but_never_a_decision() {
     r.card(ALICE, 100);
     let out = r.message(topic::TOOL_ON_RESPONSE, &no("Unknown card"), 200);
     assert_eq!(screen(&out).unwrap().1, "Unknown card");
+}
+
+// ------------------------------------------------- the heartbeat gets through
+
+#[test]
+fn the_box_pulses_whatever_it_switches() {
+    // `Reader` relays every publish the module makes (`carry`), and this is
+    // the arm that would notice if it stopped: a reader that filtered its
+    // module's actions by topic would still pass every other test here and
+    // silently go quiet on the edge (CS:S #170). What the pulse CONTAINS is
+    // spaces-device's claim, proven there; this proves only that it arrives,
+    // from both configurations, at start and on the heartbeat timer.
+    for mut r in [
+        Reader::new(Config::switches_nothing(ME, TOOL)),
+        Reader::new(Config::new(ME, TOOL)),
+    ] {
+        let first = published(&r.start(0), topic::ALIVE_REQUEST);
+        assert_eq!(first.len(), 1, "no pulse at start: {first:?}");
+        assert_eq!(first[0]["device_id"], ME);
+        assert!(published(&r.tick(999), topic::ALIVE_REQUEST).is_empty());
+        assert_eq!(published(&r.tick(1000), topic::ALIVE_REQUEST).len(), 1);
+    }
 }
 
 // ------------------------------------------------- the session on the panel
