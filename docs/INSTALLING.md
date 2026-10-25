@@ -301,6 +301,7 @@ after a firmware update rather than dropping into its portal.
 | Longest session (s) | 0 (none) | the walk-away backstop |
 | Report usage every (s) | 30 | usage is sent in increments, so a reboot costs one interval |
 | Reports usage | yes | `no` for a box that must not meter — see "A second plug on the same tool" below. Nothing else changes |
+| Wait for lease up to (s) | 5 | after a yes, how long a box that switches the tool waits for its first lease before giving up. Must exceed the tool's whole start sequence (below). Ignored without a relay |
 
 Yes/no fields accept `yes`/`no`, `y`/`n`, `true`/`false`, `1`/`0`, `on`/`off`.
 **Anything unrecognised uses the default and logs a warning** — a typo does not
@@ -322,8 +323,30 @@ things to set:
   filter — which may be exactly what you want. `ignore` lets the laser run
   without it.
 
-The two switch together, not in order: the platform does not yet sequence
-leases, so "filter on before the laser, off after" is not something to rely on.
+**Order, and run-on.** Each `power` binding in Tool Wiring carries three
+timings, and the platform applies them; this box only obeys the lease it is
+given:
+
+- *Start stage* — boxes in a lower stage must have **confirmed they are on**
+  (their own power report saying `relay_on: true`) before this one is leased.
+  Any number of boxes per stage. A box that cannot report its relay state can
+  never confirm, so nothing behind it will ever start — this firmware always
+  reports it when "Switches the tool" is on.
+- *Start delay* — then wait this long more: spin-up.
+- *Run-on* — after **any** stop or trip, keep this box on this long.
+
+So for a machine behind an extractor: extractor at stage 0 with no delay and a
+run-on; machine at stage 1 with a delay for the fan to spin up. Two things
+follow for the machine's box:
+
+- While its turn has not come it receives **no lease at all** — silence, not a
+  refusal. Set **"Wait for lease up to"** on it longer than the whole sequence:
+  the stage before it confirming (about a second after it energizes) plus its
+  own start delay, with margin. A box that gives up at the default five seconds
+  gives up on a three-second spin-up more often than not.
+- A lease is granted **only while somebody is signed on** to the tool. A box
+  with no reader on its tool is never energized; the extractor in this example
+  is on because the machine's reader opened a session on the tool they share.
 
 #### Three that are easy to get wrong
 

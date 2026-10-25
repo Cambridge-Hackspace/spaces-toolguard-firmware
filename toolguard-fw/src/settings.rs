@@ -39,6 +39,7 @@ pub mod key {
     pub const USAGE_INT_S: &str = "usage_int_s";
     pub const STOP_BTN: &str = "stop_button";
     pub const REPORTS_USAGE: &str = "report_usage";
+    pub const LEASE_WAIT_S: &str = "lease_wait_s";
 }
 
 /// The settings this firmware adds to the shared set, in the order they are
@@ -141,6 +142,16 @@ pub const FIELDS: &[Field] = &[
         required: false,
     },
     Field {
+        key: key::LEASE_WAIT_S,
+        label: "Wait for lease up to (s)",
+        hint: "5 (default). After a yes, how long a box that switches the tool waits for its \
+               first lease before giving up. Must exceed the tool's whole start sequence: a \
+               stage behind another plug gets no lease until that plug has confirmed it is \
+               on and its start delay has run. Ignored by a box that switches nothing",
+        secret: false,
+        required: false,
+    },
+    Field {
         key: key::USAGE_INT_S,
         label: "Report usage every (s)",
         hint: "30 (default). Usage is sent in increments, so a reboot mid-session costs one \
@@ -189,6 +200,7 @@ impl Settings {
         config.max_session_ms = secs_ms(store, key::MAX_SESS_S, 0);
         config.usage_interval_ms = secs_ms(store, key::USAGE_INT_S, 30);
         config.reports_usage = flag(store, key::REPORTS_USAGE, true);
+        config.first_lease_timeout_ms = secs_ms(store, key::LEASE_WAIT_S, 5);
         // Defaults to on for a box that cannot stop a session any other way,
         // and off for one that can: where a lease lapses or a relay opens, a
         // re-tap meaning "done" would surprise somebody who simply swiped
@@ -233,7 +245,7 @@ impl Settings {
         format!(
             "reads_cards={} gates_power={} senses_running={} (active {}) \
              hold={}ms assert={}ms stop_2tap={} idle_end={}ms max_session={}ms usage_every={}ms \
-             reports_usage={} stop_button={}",
+             reports_usage={} lease_wait={}ms stop_button={}",
             self.config.reads_cards,
             self.config.gates_power,
             self.config.senses_running,
@@ -245,6 +257,7 @@ impl Settings {
             self.config.max_session_ms,
             self.config.usage_interval_ms,
             self.config.reports_usage,
+            self.config.first_lease_timeout_ms,
             self.stop_button,
         )
     }
