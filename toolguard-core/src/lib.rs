@@ -23,9 +23,11 @@
 //! cards, switches power, senses the machine, or any combination. This crate
 //! adds the display to whichever of those is configured.
 
+pub mod button;
 pub mod reader;
 pub mod screen;
 
+pub use button::StopButton;
 pub use reader::{Action, Reader};
 pub use screen::{Health, Screen};
 

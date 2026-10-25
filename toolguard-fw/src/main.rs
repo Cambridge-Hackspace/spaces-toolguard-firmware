@@ -29,7 +29,7 @@ use spaces_device_espidf::store::{key, Field, Store};
 use spaces_device_espidf::update::Updates;
 use spaces_device_espidf::{boot, watch_setup_button, weblog, Firmware};
 use toolguard_core::screen::Screen;
-use toolguard_core::{Action, Health, Reader};
+use toolguard_core::{Action, Health, Reader, StopButton};
 
 mod board;
 mod broker;
@@ -43,6 +43,9 @@ mod settings;
 /// person moving at human speed is never missed, slow enough that the SPI bus
 /// is mostly idle.
 const POLL: Duration = Duration::from_millis(75);
+/// How long the stop button must stay closed before a press counts. Longer than
+/// any mechanical bounce, shorter than anyone would call a hold.
+const STOP_DEBOUNCE_MS: u64 = 50;
 
 /// This device reads cards. It switches nothing.
 ///
@@ -79,14 +82,14 @@ fn main() -> anyhow::Result<()> {
     // had the S3 using GPIO8 for both the status LED and I2C SDA, and only the
     // move checker would have caught it, on a chip nobody here can build.
     //
-    // All nine in one tuple so the conflicts are visible in one place. The
+    // All of them in one tuple so the conflicts are visible in one place. The
     // reasoning per choice is in `board`.
     let pins = peripherals.pins;
 
     // C6 Super Mini: GPIO8 is the RGB LED and a strapping pin, GPIO9 is BOOT,
     // GPIO12/13 are native USB and the only console there is.
     #[cfg(esp32c6)]
-    let (light_pin, setup_pin, sclk, mosi, miso, cs, rst, sda, scl, sense, relay) = (
+    let (light_pin, setup_pin, sclk, mosi, miso, cs, rst, sda, scl, sense, relay, stop) = (
         pins.gpio8,
         pins.gpio9,
         pins.gpio0,
@@ -96,18 +99,20 @@ fn main() -> anyhow::Result<()> {
         pins.gpio18,
         pins.gpio22,
         pins.gpio23,
-        // Both from the freely usable set (IO0-3, IO14, IO18-23), which SPI and
-        // I2C leave 14, 19, 20 and 21 of. Neither can do ADC: on the C6 that is
-        // GPIO0-6 only, and SPI has all of those -- so a sensed input here is
-        // digital, which is what an optoisolated enable line gives anyway.
+        // All three from the freely usable set (IO0-3, IO14, IO18-23), which
+        // SPI and I2C leave 14, 19, 20 and 21 of. None can do ADC: on the C6
+        // that is GPIO0-6 only, and SPI has all of those -- so a sensed input
+        // here is digital, which is what an optoisolated enable line gives
+        // anyway. The stop button is a switch to GND on the internal pull-up.
         pins.gpio14,
         pins.gpio19,
+        pins.gpio20,
     );
 
     // UNTESTED: no C3 here, so this compiles and nothing more. Same strapping
     // pair (8 and 9) as the C6; USB is on 18/19 rather than 12/13.
     #[cfg(esp32c3)]
-    let (light_pin, setup_pin, sclk, mosi, miso, cs, rst, sda, scl, sense, relay) = (
+    let (light_pin, setup_pin, sclk, mosi, miso, cs, rst, sda, scl, sense, relay, stop) = (
         pins.gpio8,
         pins.gpio9,
         pins.gpio10,
@@ -119,6 +124,9 @@ fn main() -> anyhow::Result<()> {
         pins.gpio0,
         pins.gpio2,
         pins.gpio3,
+        // GPIO20 is U0RXD. The C3 Super Mini's console is native USB on 18/19,
+        // so UART0 is free for a switch; a board that logs over UART0 is not.
+        pins.gpio20,
     );
 
     // UNTESTED: no S3 here. Its addressable LED is on GPIO48 on the boards that
@@ -126,7 +134,7 @@ fn main() -> anyhow::Result<()> {
     // clear of all of them. GPIO9 is kept for BOOT for consistency with the
     // other two rather than because the S3 needs it there.
     #[cfg(esp32s3)]
-    let (light_pin, setup_pin, sclk, mosi, miso, cs, rst, sda, scl, sense, relay) = (
+    let (light_pin, setup_pin, sclk, mosi, miso, cs, rst, sda, scl, sense, relay, stop) = (
         pins.gpio48,
         pins.gpio0,
         pins.gpio12,
@@ -138,6 +146,7 @@ fn main() -> anyhow::Result<()> {
         pins.gpio5,
         pins.gpio15,
         pins.gpio16,
+        pins.gpio17,
     );
     let sysloop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
@@ -289,6 +298,22 @@ fn main() -> anyhow::Result<()> {
     };
     let sense_active_low = settings.sense_active_low;
 
+    // The stop button: a momentary switch to GND, so the pull-up makes an
+    // unconnected or open contact read "not pressed". Debounced in the core;
+    // the pin is just sampled.
+    let mut stop = if settings.stop_button {
+        match PinDriver::input(stop, Pull::Up) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                log::error!("configured with a stop button, but the input pin failed: {e:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut stop_button = StopButton::new(STOP_DEBOUNCE_MS);
+
     // --- the loop -----------------------------------------------------------
     let mut reader = Reader::new(settings.config.clone());
     let (tx, rx) = mpsc::channel::<broker::Event>();
@@ -340,6 +365,14 @@ fn main() -> anyhow::Result<()> {
                 &mut client,
                 &mut relay,
             );
+        }
+
+        // Then the stop button, which anyone may press. One stop per press,
+        // however long the finger stays; the core turns the bounce into that.
+        if let Some(pin) = stop.as_mut() {
+            if stop_button.sample(pin.is_low(), now()) {
+                apply(reader.tool_off(now()), &mut panel, &mut client, &mut relay);
+            }
         }
 
         while let Ok(event) = rx.try_recv() {

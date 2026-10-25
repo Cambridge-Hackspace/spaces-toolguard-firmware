@@ -37,6 +37,7 @@ pub mod key {
     pub const IDLE_END_S: &str = "idle_end_s";
     pub const MAX_SESS_S: &str = "max_sess_s";
     pub const USAGE_INT_S: &str = "usage_int_s";
+    pub const STOP_BTN: &str = "stop_button";
 }
 
 /// The settings this firmware adds to the shared set, in the order they are
@@ -120,6 +121,16 @@ pub const FIELDS: &[Field] = &[
         required: false,
     },
     Field {
+        key: key::STOP_BTN,
+        label: "Has a stop button",
+        hint: "no (default). yes if a momentary switch is wired between the stop pin and \
+               GND. Pressing it ends the session -- usage reported, tool released, relay \
+               open if this box switches the tool. Anyone may press it; it is not an \
+               emergency stop",
+        secret: false,
+        required: false,
+    },
+    Field {
         key: key::USAGE_INT_S,
         label: "Report usage every (s)",
         hint: "30 (default). Usage is sent in increments, so a reboot mid-session costs one \
@@ -138,6 +149,11 @@ pub struct Settings {
     /// *semantic* bool, so exactly one inversion happens in the whole firmware
     /// and it is this one.
     pub sense_active_low: bool,
+    /// Whether a stop button is wired to the `stop` pin.
+    ///
+    /// Momentary, to GND, read with the internal pull-up; so there is no
+    /// polarity to configure, and an unconnected pin reads as "not pressed".
+    pub stop_button: bool,
 }
 
 impl Settings {
@@ -171,6 +187,7 @@ impl Settings {
         Settings {
             config,
             sense_active_low: flag(store, key::SENSE_LOW, true),
+            stop_button: flag(store, key::STOP_BTN, false),
         }
     }
 
@@ -204,7 +221,8 @@ impl Settings {
     pub fn describe(&self) -> String {
         format!(
             "reads_cards={} gates_power={} senses_running={} (active {}) \
-             hold={}ms assert={}ms stop_2tap={} idle_end={}ms max_session={}ms usage_every={}ms",
+             hold={}ms assert={}ms stop_2tap={} idle_end={}ms max_session={}ms usage_every={}ms \
+             stop_button={}",
             self.config.reads_cards,
             self.config.gates_power,
             self.config.senses_running,
@@ -215,6 +233,7 @@ impl Settings {
             self.config.idle_end_ms,
             self.config.max_session_ms,
             self.config.usage_interval_ms,
+            self.stop_button,
         )
     }
 }

@@ -175,6 +175,25 @@ having to do anything.
 unauthorized card leaves the enable line in the disabled state and an authorized
 one releases it, with a meter on the line, before the tube is connected.
 
+### c. The stop button — optional, and anyone may press it
+
+A momentary, normally-open switch between the **stop** pin and **GND**. No
+resistor: the pin uses the chip's internal pull-up, so an open contact — or no
+button at all — reads as "not pressed". Turn on "Has a stop button" in §6.
+
+Pressing it **ends the session**: usage reported, the tool released on the
+platform, and in gating mode the relay opens within one poll (under 100 ms). It
+needs no card. That is deliberate and matches the platform's rule — *anyone may
+cut the power* — so a member's colleague, or a passer-by who sees something
+wrong, can stop the job without finding the member. The session is still closed
+under the card that opened it, because that is who the usage belongs to.
+
+It is **not an emergency stop** (§1). In watch mode nothing physical happens —
+the box observes and cannot interfere — and in gating mode the relay is a
+software path through this firmware, its lease and a Wi-Fi link. A machine that
+needs a stop that works when all of that is dead needs a real E-stop in series
+with its own supply, and this button beside it, not instead of it.
+
 ### Isolation is not optional
 
 - **5 V (or 24 V) must never reach an ESP32 pin.** They are 3.3 V and not
@@ -200,7 +219,8 @@ one releases it, with a meter on the line, before the tube is connected.
 
 ## 5. Pins
 
-Seven are always used; **sense** and **relay** only by the modes that need them.
+Seven are always used; **sense**, **relay** and **stop** only by the modes that
+need them.
 
 <!-- PINMAP: checked against toolguard-fw/src/main.rs by
      toolguard-core/tests/pinmap.rs. Keep the table shape if you edit it. -->
@@ -218,6 +238,7 @@ Seven are always used; **sense** and **relay** only by the modes that need them.
 | scl | 23 | 0 | 5 |
 | sense | 14 | 2 | 15 |
 | relay | 19 | 3 | 16 |
+| stop | 20 | 20 | 17 |
 
 ### Do not move these on a C6 Super Mini
 
@@ -229,7 +250,7 @@ Seven are always used; **sense** and **relay** only by the modes that need them.
 | **GPIO4–7** | strapping, JTAG and flash-adjacent |
 
 Freely usable on that board: IO0–IO3, IO14, IO18–IO23. SPI and I²C take seven of
-them, which is why sense and relay are 14 and 19.
+them, which is why sense, relay and stop are 14, 19 and 20.
 
 ### The sensed input is digital, and cannot be analog here
 
@@ -275,6 +296,7 @@ after a firmware update rather than dropping into its portal.
 | Bridge gaps (seconds) | 10 | how long the machine may pause and still count as working. See §2c |
 | Ignore blips under (ms) | 100 | the signal must hold this long to count |
 | Tap again to finish | yes, unless gating | the member's own card ends their session |
+| Has a stop button | **no** | `yes` reads the stop pin (§4c). Pressing it ends the session; anyone may, and it is not an E-stop |
 | Finish after idle (s) | 0 (never) | needs a sensor; ignored without one |
 | Longest session (s) | 0 (none) | the walk-away backstop |
 | Report usage every (s) | 30 | usage is sent in increments, so a reboot costs one interval |

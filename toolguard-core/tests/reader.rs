@@ -475,6 +475,28 @@ fn signing_off_releases_the_tool_and_says_so() {
 }
 
 #[test]
+fn the_stop_button_ends_the_session_and_needs_no_card() {
+    // Anyone may press it: a stop needs no credential, by design -- anyone may
+    // cut the power. The session is still closed with the card that opened it,
+    // because that is who the usage belongs to.
+    let mut r = reader();
+    assert!(
+        publishes_to(&r.tool_off(50)).is_empty(),
+        "a press with no session open sent something"
+    );
+    r.card(ALICE, 100);
+    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    let out = r.tool_off(30_000);
+    assert_eq!(
+        publishes_to(&out),
+        vec![topic::TOOL_LOG_REQUEST, topic::TOOL_OFF_REQUEST],
+        "the stop button did not release the tool: {out:?}"
+    );
+    assert_eq!(published(&out, topic::TOOL_OFF_REQUEST)[0]["card"], ALICE);
+    assert_eq!(screen(&out).unwrap().0, "Session ended");
+}
+
+#[test]
 fn a_reader_that_does_not_take_a_second_tap_offers_no_hint_about_one() {
     // Telling a member to "tap to finish" where it does nothing is worse than
     // saying nothing: they will tap, nothing will happen, and they will leave.
