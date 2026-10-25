@@ -362,8 +362,13 @@ the roles it actually claims:
    sensor the bottom line is the `Tap to finish` hint instead; a box that
    measures nothing shows no figure.
 8. **Swipe again** and confirm `Session ended`, if "Tap again to finish" is on.
-9. **In gating mode, test the fail-safe with the tube disconnected** (§4b).
-10. **Fire a real job** and check the reported usage against the clock. This is
+9. **If a stop button is wired, press it mid-session.** The panel should read
+   `Session ended` at once and, in gating mode, the relay should open. If
+   nothing happens, "Has a stop button" is off (§6) or the switch is not
+   between the stop pin and GND (§4c). A press with no session open does
+   nothing, by design.
+10. **In gating mode, test the fail-safe with the tube disconnected** (§4b).
+11. **Fire a real job** and check the reported usage against the clock. This is
     where a wrong "Bridge gaps" shows up: far too little usage means the bridge
     is shorter than the machine's pauses.
 
@@ -411,6 +416,8 @@ Two consequences worth knowing:
 | Usage is a fraction of the real time | "Bridge gaps" is shorter than the machine's pauses. §2c |
 | Usage counts time the machine was idle | sense polarity is inverted. §3 |
 | No card is ever detected, version register fine | SPI mode. §5 |
+| Pressing the stop button does nothing | "Has a stop button" is off, or the switch is not between the stop pin and GND (§4c). It also does nothing when no session is open, which is correct |
+| The stop button fires on its own | the stop pin is floating or picking up noise from the HV side — check the switch really goes to GND and keep its wire away from the laser supply. Only a contact held for 50 ms counts, so this takes real interference |
 | Panel blank | contrast trimpot, then the I²C address, then the wiring |
 | `Reader fault — see /log` | the RC522 did not answer at all. Check 3V3 and the SPI wiring |
 
