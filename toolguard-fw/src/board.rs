@@ -21,8 +21,9 @@
 //!   these are the only console there is; losing them loses flashing and logs.
 //! - **GPIO4/5/6/7** are strapping, JTAG and flash-adjacent.
 //!
-//! That leaves IO0–IO3, IO14 and IO18–IO23 freely usable, which is more than
-//! the seven this needs. The C6's GPIO matrix routes SPI2 and I2C to almost any
+//! That leaves IO0–IO3, IO14 and IO18–IO23 freely usable: eleven pins, and
+//! this firmware uses all eleven when every role is wired (seven always; sense,
+//! relay, stop and strike by the roles that need them). The C6's GPIO matrix routes SPI2 and I2C to almost any
 //! pin, and ESP-IDF is explicit that below 40 MHz routing through the matrix is
 //! no worse than the IOMUX pins — so at 1 MHz this is a pin-budget question and
 //! not a capability one.

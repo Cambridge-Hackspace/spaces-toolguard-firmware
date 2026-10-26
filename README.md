@@ -2,10 +2,13 @@
 
 A generic tool box for [Cooperative Systems: Spaces][css], the access-control
 platform at the [Cambridge Hackspace][hackspace]. One image, configured at
-setup into whichever of these a machine needs: a badge reader that asks the
-edge and shows the answer on a 16x2 LCD; a reader that also switches the
-machine; a reader that watches it work and meters the time; a plug with no
-reader at all; and, on any of them, a stop button anyone may press.
+setup into whichever of these a machine -- or a door, or a room -- needs: a
+badge reader that asks the edge and shows the answer on a 16x2 LCD; a reader
+that also switches the machine; a reader that watches it work and meters the
+time; a plug with no reader at all; a door box that releases a latch for the
+pulse the platform names; and, on any of them, a stop button anyone may press.
+A door, a tool and a room are the same resource with different bindings (CS:S
+#182), and this box speaks the resource-shaped local wire.
 
 > Work in progress. The protocol core and the display model are host-tested; the
 > firmware compiles for all three chips in CI. **No board has run any of it** —
@@ -37,7 +40,7 @@ included, which goes through this firmware, a lease and a Wi-Fi link.
 
 The protocol is not redefined here. `Module`, the topics and the wire types come
 from [`spaces-firmware`][sf]'s `spaces-device`, pinned by tag in `Cargo.toml`
-(currently `v0.3.3`), so this box and every other module speak the same wire by
+(currently `v0.4.0`), so this box and every other module speak the same wire by
 construction.
 
 ## The panel is sixteen columns, and that is a design constraint
@@ -100,17 +103,19 @@ wiring anything, both wiring modes, commissioning in order, and what to do when
 it does not work. This section is the summary.
 
 Seven pins always: SPI (SCLK, MOSI, MISO, CS) plus RST for the RC522, and
-SDA/SCL for the panel. Three more are used only by the roles that need them —
+SDA/SCL for the panel. Four more are used only by the roles that need them —
 a **sense** input for a box that watches the machine, a **relay** output for one
-that switches it, and a **stop** input for a momentary switch to GND that ends
-the session when anyone presses it. The assignment is a `cfg`-gated tuple in
+that switches it, a **stop** input for a momentary switch to GND that ends
+the session when anyone presses it, and a **strike** output for a door's latch
+driver. The assignment is a `cfg`-gated tuple in
 `toolguard-fw/src/main.rs`, one arm per chip, the reasoning is in
 `toolguard-fw/src/board.rs`, and the table in `docs/INSTALLING.md` is checked
 against the tuple by a test.
 
 **What the box is, is configuration and not a build.** One image is flashed and
 the same board becomes a badge reader beside a laser, a reader that also
-switches it, a reader that watches it work, or a plug with no reader at all. The
+switches it, a reader that watches it work, a plug with no reader at all, or a
+door box that releases a latch. The
 settings are on the device's own setup page and are read at boot; see
 `toolguard-fw/src/settings.rs` for each one, its default, and what going wrong
 looks like. Two are worth knowing before wiring anything:

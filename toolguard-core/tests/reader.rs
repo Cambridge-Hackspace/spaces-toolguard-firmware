@@ -94,19 +94,19 @@ fn here(r: &Reader) -> (String, String) {
 }
 
 fn yes() -> Vec<u8> {
-    serde_json::json!({"tool_id": TOOL, "authorized": true, "reason": "authorized"})
+    serde_json::json!({"resource": TOOL, "authorized": true, "reason": "authorized"})
         .to_string()
         .into_bytes()
 }
 
 fn no(reason: &str) -> Vec<u8> {
-    serde_json::json!({"tool_id": TOOL, "authorized": false, "reason": reason})
+    serde_json::json!({"resource": TOOL, "authorized": false, "reason": reason})
         .to_string()
         .into_bytes()
 }
 
 fn lease(ttl_ms: u64) -> Vec<u8> {
-    serde_json::json!({"tool_id": TOOL, "device_id": ME, "grant": true, "ttl_ms": ttl_ms})
+    serde_json::json!({"resource": TOOL, "device_id": ME, "grant": true, "ttl_ms": ttl_ms})
         .to_string()
         .into_bytes()
 }
@@ -186,7 +186,7 @@ fn the_same_card_held_against_the_reader_is_one_tap() {
     // The RC522 reports a card for as long as it is in the field.
     let mut r = reader();
     let first = r.card(ALICE, 100);
-    assert_eq!(publishes_to(&first), vec![topic::TOOL_ON_REQUEST]);
+    assert_eq!(publishes_to(&first), vec![topic::SCAN_REQUEST]);
     for t in [150, 400, 900, 100 + SAME_CARD_COOLDOWN_MS - 1] {
         let again = r.card(ALICE, t);
         assert!(
@@ -202,7 +202,7 @@ fn the_same_card_held_against_the_reader_is_one_tap() {
 fn a_held_card_does_not_open_a_session_and_immediately_close_it() {
     let mut r = reader();
     r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &yes(), 150);
+    r.message(topic::SCAN_RESPONSE, &yes(), 150);
     let held = r.card(ALICE, 200);
     assert!(
         publishes_to(&held).is_empty(),
@@ -237,12 +237,12 @@ fn the_panel_says_it_is_working_while_it_waits() {
 fn a_yes_shows_granted_and_a_no_shows_the_reason() {
     let mut r = reader();
     r.card(ALICE, 100);
-    let out = r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    let out = r.message(topic::SCAN_RESPONSE, &yes(), 200);
     assert_eq!(screen(&out).unwrap().0, "ACCESS GRANTED");
 
     let mut r = reader();
     r.card(BOB, 100);
-    let out = r.message(topic::TOOL_ON_RESPONSE, &no("Unknown card"), 200);
+    let out = r.message(topic::SCAN_RESPONSE, &no("Unknown card"), 200);
     assert_eq!(
         screen(&out),
         Some(("ACCESS DENIED".into(), "Unknown card".into()))
@@ -267,7 +267,7 @@ fn nothing_answering_does_not_blame_the_member() {
 fn an_outcome_is_replaced_by_the_resting_screen_once_it_has_been_read() {
     let mut r = reader();
     r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &no("Unknown card"), 200);
+    r.message(topic::SCAN_RESPONSE, &no("Unknown card"), 200);
     assert_eq!(here(&r).0, "ACCESS DENIED");
     r.tick(200 + SHOW_MS - 1);
     assert_eq!(here(&r).0, "ACCESS DENIED", "retired early");
@@ -281,7 +281,7 @@ fn health_news_does_not_wipe_an_outcome_off_the_panel() {
     // away; the panel is the only place the answer appeared.
     let mut r = reader();
     r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &no("Training required"), 200);
+    r.message(topic::SCAN_RESPONSE, &no("Training required"), 200);
     r.health(
         Health {
             wifi: false,
@@ -321,7 +321,7 @@ fn the_clock_reaches_the_idle_screen_but_never_a_decision() {
     // And it does not leak into a verdict, which has sixteen columns to spend
     // on the answer.
     r.card(ALICE, 100);
-    let out = r.message(topic::TOOL_ON_RESPONSE, &no("Unknown card"), 200);
+    let out = r.message(topic::SCAN_RESPONSE, &no("Unknown card"), 200);
     assert_eq!(screen(&out).unwrap().1, "Unknown card");
 }
 
@@ -355,7 +355,7 @@ fn a_reader_with_no_relay_says_signed_in_rather_than_unlocked() {
     // hot. The distinction is the whole reason `Activity` carries `energized`.
     let mut r = reader();
     r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    r.message(topic::SCAN_RESPONSE, &yes(), 200);
     r.tick(200 + SHOW_MS);
     assert_eq!(here(&r), ("Signed in".into(), "Tap to finish".into()));
 }
@@ -364,7 +364,7 @@ fn a_reader_with_no_relay_says_signed_in_rather_than_unlocked() {
 fn a_reader_that_gates_the_tool_says_unlocked_once_it_really_is() {
     let mut r = gating_reader();
     r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    r.message(topic::SCAN_RESPONSE, &yes(), 200);
     // Authorized, but no lease yet: the tool is dark, so the panel must not
     // claim otherwise.
     r.tick(200 + SHOW_MS);
@@ -386,7 +386,7 @@ fn a_sensing_reader_shows_the_meter_and_whether_it_is_climbing() {
     r.start(0);
     r.health(online(), 0);
     r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    r.message(topic::SCAN_RESPONSE, &yes(), 200);
     r.tick(200 + SHOW_MS);
     assert_eq!(here(&r), ("Signed in".into(), "Idle     0:00:00".into()));
 
@@ -418,7 +418,7 @@ fn a_reader_that_senses_nothing_shows_no_figure() {
     // second tap is the only stop, and inventing a meter would hide that.
     let mut r = reader();
     r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    r.message(topic::SCAN_RESPONSE, &yes(), 200);
     r.tick(200 + SHOW_MS + 30_000);
     assert_eq!(here(&r), ("Signed in".into(), "Tap to finish".into()));
 }
@@ -427,7 +427,7 @@ fn a_reader_that_senses_nothing_shows_no_figure() {
 fn a_reader_that_gates_the_tool_drives_the_output() {
     let mut r = gating_reader();
     r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    r.message(topic::SCAN_RESPONSE, &yes(), 200);
     let out = r.message(topic::LEASE, &lease(600_000), 300);
     assert!(
         out.contains(&Action::Set {
@@ -442,7 +442,7 @@ fn a_reader_that_gates_the_tool_drives_the_output() {
 fn a_reader_with_no_relay_drives_no_output() {
     let mut r = reader();
     r.card(ALICE, 100);
-    let out = r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    let out = r.message(topic::SCAN_RESPONSE, &yes(), 200);
     assert!(
         !out.iter().any(|a| matches!(
             a,
@@ -459,15 +459,15 @@ fn a_reader_with_no_relay_drives_no_output() {
 fn signing_off_releases_the_tool_and_says_so() {
     let mut r = reader();
     r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    r.message(topic::SCAN_RESPONSE, &yes(), 200);
     let out = r.card(ALICE, 100 + SAME_CARD_COOLDOWN_MS + 1);
     assert_eq!(
         publishes_to(&out),
-        vec![topic::TOOL_LOG_REQUEST, topic::TOOL_OFF_REQUEST],
+        vec![topic::USAGE_REQUEST, topic::STOP_REQUEST],
         "a second tap did not release the tool: {out:?}"
     );
     assert_eq!(
-        published(&out, topic::TOOL_OFF_REQUEST)[0]["card"],
+        published(&out, topic::STOP_REQUEST)[0]["card"],
         ALICE,
         "released with the wrong card"
     );
@@ -480,19 +480,23 @@ fn the_stop_button_ends_the_session_and_needs_no_card() {
     // cut the power. The session is still closed with the card that opened it,
     // because that is who the usage belongs to.
     let mut r = reader();
-    assert!(
-        publishes_to(&r.tool_off(50)).is_empty(),
-        "a press with no session open sent something"
-    );
+    // With no session open the stop still goes out, naming the resource and
+    // no card (spaces-device 0.4): the platform ends whatever session is open
+    // on the resource, and a stop that lands on nothing is harmless.
+    let idle = r.tool_off(50);
+    assert_eq!(publishes_to(&idle), vec![topic::STOP_REQUEST]);
+    assert!(published(&idle, topic::STOP_REQUEST)[0]
+        .get("card")
+        .is_none());
     r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    r.message(topic::SCAN_RESPONSE, &yes(), 200);
     let out = r.tool_off(30_000);
     assert_eq!(
         publishes_to(&out),
-        vec![topic::TOOL_LOG_REQUEST, topic::TOOL_OFF_REQUEST],
+        vec![topic::USAGE_REQUEST, topic::STOP_REQUEST],
         "the stop button did not release the tool: {out:?}"
     );
-    assert_eq!(published(&out, topic::TOOL_OFF_REQUEST)[0]["card"], ALICE);
+    assert_eq!(published(&out, topic::STOP_REQUEST)[0]["card"], ALICE);
     assert_eq!(screen(&out).unwrap().0, "Session ended");
 }
 
@@ -506,7 +510,7 @@ fn a_reader_that_does_not_take_a_second_tap_offers_no_hint_about_one() {
     r.start(0);
     r.health(online(), 0);
     r.card(ALICE, 100);
-    r.message(topic::TOOL_ON_RESPONSE, &yes(), 200);
+    r.message(topic::SCAN_RESPONSE, &yes(), 200);
     r.tick(200 + SHOW_MS);
     assert_eq!(here(&r), ("Signed in".into(), "".into()));
 }
@@ -571,4 +575,88 @@ fn a_multibyte_reason_is_cut_by_character_and_does_not_panic() {
     // that happens to contain one. The edge's strings are not ours to predict.
     let s = toolguard_core::screen::denied("héllo wörld — a very long reason indeed");
     assert!(s.bottom().chars().count() <= COLS);
+}
+
+// ---------------------------------------------------------- a door box (CS:S #182)
+//
+// The same image, configured to drive a door's latch and switch nothing. Its
+// session is the pulse: the latch is released for exactly as long as the edge
+// says, the panel says so, and nothing is "signed into".
+
+fn door_box() -> Reader {
+    let mut r = Reader::new(Config::drives_a_latch(ME, "front-door"));
+    r.start(0);
+    r.health(online(), 0);
+    r
+}
+
+fn yes_with_strike(pulse_ms: u64) -> Vec<u8> {
+    serde_json::json!({"resource": "front-door", "authorized": true, "strike": {"pulse_ms": pulse_ms}})
+        .to_string()
+        .into_bytes()
+}
+
+#[test]
+fn a_door_box_releases_the_latch_and_says_door_open() {
+    let mut r = door_box();
+    r.card(ALICE, 100);
+    let out = r.message(topic::SCAN_RESPONSE, &yes_with_strike(4200), 200);
+    assert!(
+        out.contains(&Action::Set {
+            output: Output::Strike,
+            on: true
+        }),
+        "the latch was never released: {out:?}"
+    );
+    assert!(
+        !out.iter().any(|a| matches!(
+            a,
+            Action::Set {
+                output: Output::Tool,
+                ..
+            }
+        )),
+        "a door box has no relay to close: {out:?}"
+    );
+    assert_eq!(screen(&out).map(|s| s.0), Some("Door open".to_string()));
+    // Past the outcome hold and still inside the pulse: the resting screen is
+    // the same truth, not "Signed in".
+    r.tick(200 + SHOW_MS);
+    assert_eq!(here(&r).0, "Door open");
+    // The pulse ends: latch closed, and the panel rests on "Present card"
+    // rather than announcing a session that nobody opened.
+    let end = r.tick(4400);
+    assert!(
+        end.contains(&Action::Set {
+            output: Output::Strike,
+            on: false
+        }),
+        "the latch was never closed again: {end:?}"
+    );
+    assert!(
+        !end.iter()
+            .any(|a| matches!(a, Action::Show(s) if s.top() == "Session ended")),
+        "a pulse ending was announced as a session ending: {end:?}"
+    );
+    assert_eq!(here(&r).0, "Present card");
+    assert!(
+        publishes_to(&end).is_empty(),
+        "a pulse ending sent something: {end:?}"
+    );
+}
+
+#[test]
+fn a_door_boxs_stop_button_releases_the_resource_without_a_card() {
+    // Its session was the pulse and is long over; the stop still goes out,
+    // naming the resource alone -- that is how a room held open until a stop
+    // is closed from the door that opened it.
+    let mut r = door_box();
+    let out = r.tool_off(5000);
+    assert_eq!(publishes_to(&out), vec![topic::STOP_REQUEST]);
+    let stop = &published(&out, topic::STOP_REQUEST)[0];
+    assert_eq!(stop["resource"], "front-door");
+    assert!(
+        stop.get("card").is_none(),
+        "named a card it does not have: {stop}"
+    );
 }

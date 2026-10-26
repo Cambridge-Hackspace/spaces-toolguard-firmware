@@ -212,12 +212,23 @@ impl Reader {
                 DeviceAction::Note(text) => out.push(Action::Note(text)),
                 DeviceAction::Outcome(outcome) => {
                     let screen = match &outcome {
+                        // A door box's yes is the latch releasing; a member
+                        // told ACCESS GRANTED would wait to be let in (CS:S
+                        // #182).
+                        Outcome::Authorized if self.is_door_box() => screen::door_open(),
                         Outcome::Authorized => screen::granted(),
                         // The edge's own words, truncated to the panel rather
                         // than matched on. `FIRMWARE.md`: branch on the
                         // boolean, display the string.
                         Outcome::Refused(why) => screen::denied(why),
                         Outcome::NoAnswer => screen::no_answer(),
+                        // The pulse ending is not a session ending that a
+                        // member needs told about: the panel simply rests.
+                        Outcome::Ended(spaces_device::EndReason::StrikePulsed) => {
+                            out.push(Action::Note(format!("panel: {outcome:?}")));
+                            self.showing_until = None;
+                            continue;
+                        }
                         Outcome::Ended(_) => screen::ended(),
                     };
                     out.push(Action::Note(format!("panel: {outcome:?}")));
@@ -226,6 +237,14 @@ impl Reader {
             }
         }
         out
+    }
+
+    /// A box whose session is the latch pulse: it drives a latch and switches
+    /// no power (CS:S #182). A box that does both is a room in one box and
+    /// keeps the tool's screens.
+    fn is_door_box(&self) -> bool {
+        let c = self.module.config();
+        c.drives_latch && !c.gates_power
     }
 
     /// Show a screen and keep it there for [`SHOW_MS`], over whatever the
@@ -250,6 +269,9 @@ impl Reader {
         }
         let screen = match self.module.activity() {
             Activity::Asking => screen::asking(),
+            // While the latch is released there is nothing to sign into; the
+            // panel keeps saying what is true (CS:S #182).
+            Activity::Session { .. } if self.is_door_box() => screen::door_open(),
             Activity::Session { energized } => screen::in_session(
                 energized,
                 self.module.config().stop_on_second_tap,

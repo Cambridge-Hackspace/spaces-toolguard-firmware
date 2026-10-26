@@ -113,6 +113,12 @@ pub fn granted() -> Screen {
     Screen::new("ACCESS GRANTED", "")
 }
 
+/// The screen for a yes on a door box (CS:S #182): the latch is released, and
+/// that is the whole of what happened -- there is no session to sign into.
+pub fn door_open() -> Screen {
+    Screen::new("Door open", "")
+}
+
 /// The screen for a no, carrying as much of the edge's reason as fits.
 ///
 /// The verdict and the reason are on separate lines on purpose: the top line is

@@ -1,9 +1,11 @@
 //! What this box is, as an administrator sets it.
 //!
-//! The roles are independent — read cards, switch power, sense the machine — and
-//! a ToolGuard may fill any combination. None of that is a build-time choice:
-//! one image is flashed and the same board becomes a reader beside a laser, a
-//! reader that also switches it, or a plug with no reader at all.
+//! The roles are independent — read cards, switch power, sense the machine,
+//! drive a door's latch — and a ToolGuard may fill any combination. None of that
+//! is a build-time choice: one image is flashed and the same board becomes a
+//! reader beside a laser, a reader that also switches it, a plug with no reader
+//! at all, or a door box (CS:S #182: a door, a tool and a room are the same
+//! resource with different bindings).
 //!
 //! **Every field here is `required: false`, and that is load-bearing.**
 //! `Store::missing` puts a device into the setup portal and keeps it there
@@ -40,6 +42,7 @@ pub mod key {
     pub const STOP_BTN: &str = "stop_button";
     pub const REPORTS_USAGE: &str = "report_usage";
     pub const LEASE_WAIT_S: &str = "lease_wait_s";
+    pub const DRIVES_LATCH: &str = "drives_latch";
 }
 
 /// The settings this firmware adds to the shared set, in the order they are
@@ -133,6 +136,18 @@ pub const FIELDS: &[Field] = &[
         required: false,
     },
     Field {
+        key: key::DRIVES_LATCH,
+        label: "Drives a latch",
+        hint: "no (default). yes if a door strike's driver is wired to the strike pin. On a \
+               yes the pin is driven for exactly the pulse the platform names -- the \
+               resource's strike binding, set in Resource Wiring -- then released; this \
+               box then registers in the strike role. A box that drives a latch and \
+               switches nothing is a door box: its session is the pulse. Not an egress \
+               or fire-safety device",
+        secret: false,
+        required: false,
+    },
+    Field {
         key: key::REPORTS_USAGE,
         label: "Reports usage",
         hint: "yes (default). no for a box that must not meter: a second plug on a tool \
@@ -201,6 +216,7 @@ impl Settings {
         config.usage_interval_ms = secs_ms(store, key::USAGE_INT_S, 30);
         config.reports_usage = flag(store, key::REPORTS_USAGE, true);
         config.first_lease_timeout_ms = secs_ms(store, key::LEASE_WAIT_S, 5);
+        config.drives_latch = flag(store, key::DRIVES_LATCH, false);
         // Defaults to on for a box that cannot stop a session any other way,
         // and off for one that can: where a lease lapses or a relay opens, a
         // re-tap meaning "done" would surprise somebody who simply swiped
@@ -233,6 +249,9 @@ impl Settings {
         if self.config.senses_running {
             roles.push("sensor");
         }
+        if self.config.drives_latch {
+            roles.push("strike");
+        }
         roles
     }
 
@@ -245,7 +264,7 @@ impl Settings {
         format!(
             "reads_cards={} gates_power={} senses_running={} (active {}) \
              hold={}ms assert={}ms stop_2tap={} idle_end={}ms max_session={}ms usage_every={}ms \
-             reports_usage={} lease_wait={}ms stop_button={}",
+             reports_usage={} lease_wait={}ms stop_button={} drives_latch={}",
             self.config.reads_cards,
             self.config.gates_power,
             self.config.senses_running,
@@ -259,6 +278,7 @@ impl Settings {
             self.config.reports_usage,
             self.config.first_lease_timeout_ms,
             self.stop_button,
+            self.config.drives_latch,
         )
     }
 }

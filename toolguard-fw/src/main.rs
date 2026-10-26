@@ -89,7 +89,7 @@ fn main() -> anyhow::Result<()> {
     // C6 Super Mini: GPIO8 is the RGB LED and a strapping pin, GPIO9 is BOOT,
     // GPIO12/13 are native USB and the only console there is.
     #[cfg(esp32c6)]
-    let (light_pin, setup_pin, sclk, mosi, miso, cs, rst, sda, scl, sense, relay, stop) = (
+    let (light_pin, setup_pin, sclk, mosi, miso, cs, rst, sda, scl, sense, relay, stop, strike) = (
         pins.gpio8,
         pins.gpio9,
         pins.gpio0,
@@ -99,20 +99,23 @@ fn main() -> anyhow::Result<()> {
         pins.gpio18,
         pins.gpio22,
         pins.gpio23,
-        // All three from the freely usable set (IO0-3, IO14, IO18-23), which
-        // SPI and I2C leave 14, 19, 20 and 21 of. None can do ADC: on the C6
-        // that is GPIO0-6 only, and SPI has all of those -- so a sensed input
-        // here is digital, which is what an optoisolated enable line gives
-        // anyway. The stop button is a switch to GND on the internal pull-up.
+        // All four from the freely usable set (IO0-3, IO14, IO18-23), which
+        // SPI and I2C leave 14, 19, 20 and 21 of -- and these take all four,
+        // so a C6 Super Mini is full. None can do ADC: on the C6 that is
+        // GPIO0-6 only, and SPI has all of those -- so a sensed input here is
+        // digital, which is what an optoisolated enable line gives anyway. The
+        // stop button is a switch to GND on the internal pull-up; the strike
+        // is an output to a latch driver (CS:S #182), driven low at boot.
         pins.gpio14,
         pins.gpio19,
         pins.gpio20,
+        pins.gpio21,
     );
 
     // UNTESTED: no C3 here, so this compiles and nothing more. Same strapping
     // pair (8 and 9) as the C6; USB is on 18/19 rather than 12/13.
     #[cfg(esp32c3)]
-    let (light_pin, setup_pin, sclk, mosi, miso, cs, rst, sda, scl, sense, relay, stop) = (
+    let (light_pin, setup_pin, sclk, mosi, miso, cs, rst, sda, scl, sense, relay, stop, strike) = (
         pins.gpio8,
         pins.gpio9,
         pins.gpio10,
@@ -124,9 +127,11 @@ fn main() -> anyhow::Result<()> {
         pins.gpio0,
         pins.gpio2,
         pins.gpio3,
-        // GPIO20 is U0RXD. The C3 Super Mini's console is native USB on 18/19,
-        // so UART0 is free for a switch; a board that logs over UART0 is not.
+        // GPIO20 is U0RXD and GPIO21 is U0TXD. The C3 Super Mini's console is
+        // native USB on 18/19, so UART0 is free for a switch and a latch; a
+        // board that logs over UART0 is not.
         pins.gpio20,
+        pins.gpio21,
     );
 
     // UNTESTED: no S3 here. Its addressable LED is on GPIO48 on the boards that
@@ -134,7 +139,7 @@ fn main() -> anyhow::Result<()> {
     // clear of all of them. GPIO9 is kept for BOOT for consistency with the
     // other two rather than because the S3 needs it there.
     #[cfg(esp32s3)]
-    let (light_pin, setup_pin, sclk, mosi, miso, cs, rst, sda, scl, sense, relay, stop) = (
+    let (light_pin, setup_pin, sclk, mosi, miso, cs, rst, sda, scl, sense, relay, stop, strike) = (
         pins.gpio48,
         pins.gpio0,
         pins.gpio12,
@@ -147,6 +152,7 @@ fn main() -> anyhow::Result<()> {
         pins.gpio15,
         pins.gpio16,
         pins.gpio17,
+        pins.gpio18,
     );
     let sysloop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
@@ -282,6 +288,26 @@ fn main() -> anyhow::Result<()> {
         None
     };
 
+    // The latch's driver (CS:S #182), only when something is meant to be wired
+    // to it, and driven low at boot for the same reason as the relay: an
+    // output nobody has set is an output that might be holding a door open.
+    let mut strike: Option<PinDriver<'_, Output>> = if settings.config.drives_latch {
+        match PinDriver::output(strike) {
+            Ok(mut p) => {
+                let _ = p.set_low();
+                Some(p)
+            }
+            Err(e) => {
+                log::error!("configured to drive a latch, but the strike pin failed: {e:#}");
+                light.set(Status::Failed);
+                std::thread::sleep(Duration::from_secs(30));
+                esp_idf_svc::hal::reset::restart();
+            }
+        }
+    } else {
+        None
+    };
+
     // The sensed input. Pulled up, so an unconnected pin reads as "not
     // working" when the sense is active-low, which is the quiet default rather
     // than a machine that looks permanently busy.
@@ -330,12 +356,19 @@ fn main() -> anyhow::Result<()> {
     // `start` first: it puts the outputs in a known state and sends the first
     // heartbeats -- the power report and the alive pulse -- which are what
     // credit this device with being alive on the local broker.
-    apply(reader.start(now()), &mut panel, &mut client, &mut relay);
+    apply(
+        reader.start(now()),
+        &mut panel,
+        &mut client,
+        &mut relay,
+        &mut strike,
+    );
     apply(
         reader.health(health(&address, broker_up), now()),
         &mut panel,
         &mut client,
         &mut relay,
+        &mut strike,
     );
 
     loop {
@@ -347,6 +380,7 @@ fn main() -> anyhow::Result<()> {
                 &mut panel,
                 &mut client,
                 &mut relay,
+                &mut strike,
             );
         }
 
@@ -364,6 +398,7 @@ fn main() -> anyhow::Result<()> {
                 &mut panel,
                 &mut client,
                 &mut relay,
+                &mut strike,
             );
         }
 
@@ -371,7 +406,13 @@ fn main() -> anyhow::Result<()> {
         // however long the finger stays; the core turns the bounce into that.
         if let Some(pin) = stop.as_mut() {
             if stop_button.sample(pin.is_low(), now()) {
-                apply(reader.tool_off(now()), &mut panel, &mut client, &mut relay);
+                apply(
+                    reader.tool_off(now()),
+                    &mut panel,
+                    &mut client,
+                    &mut relay,
+                    &mut strike,
+                );
             }
         }
 
@@ -395,10 +436,16 @@ fn main() -> anyhow::Result<()> {
                     reader.message(&topic, &payload, now())
                 }
             };
-            apply(actions, &mut panel, &mut client, &mut relay);
+            apply(actions, &mut panel, &mut client, &mut relay, &mut strike);
         }
 
-        apply(reader.tick(now()), &mut panel, &mut client, &mut relay);
+        apply(
+            reader.tick(now()),
+            &mut panel,
+            &mut client,
+            &mut relay,
+            &mut strike,
+        );
         std::thread::sleep(POLL);
     }
 }
@@ -409,6 +456,7 @@ fn apply(
     panel: &mut Option<lcd::Panel<'_>>,
     client: &mut esp_idf_svc::mqtt::client::EspMqttClient<'static>,
     relay: &mut Option<PinDriver<'_, Output>>,
+    strike: &mut Option<PinDriver<'_, Output>>,
 ) {
     use esp_idf_svc::mqtt::client::QoS;
     for action in actions {
@@ -433,10 +481,28 @@ fn apply(
             Action::Note(note) => log::info!("{note}"),
             Action::Set { output, on } => {
                 log::info!("{output:?} {}", if on { "ON" } else { "off" });
-                // Only the tool output reaches hardware here. `Output::Running`
-                // is an indicator and this box has no lamp for it -- the panel
-                // is what tells a member the machine is working, and the status
-                // LED is already spoken for by the network state.
+                // The tool output and the strike reach hardware here.
+                // `Output::Running` is an indicator and this box has no lamp
+                // for it -- the panel is what tells a member the machine is
+                // working, and the status LED is already spoken for by the
+                // network state.
+                if output == toolguard_core::Output::Strike {
+                    match strike.as_mut() {
+                        Some(pin) => {
+                            let r = if on { pin.set_high() } else { pin.set_low() };
+                            if let Err(e) = r {
+                                // Loud, for the same reason as the relay: a
+                                // write that failed means a door is not where
+                                // the core believes it is.
+                                log::error!("strike write failed: {e:#}");
+                            }
+                        }
+                        // Unreachable by construction -- the core emits no
+                        // Strike action unless `drives_latch` is set, and the
+                        // pin is opened whenever it is.
+                        None => log::error!("asked to drive the latch with no strike configured"),
+                    }
+                }
                 if output == toolguard_core::Output::Tool {
                     match relay.as_mut() {
                         Some(pin) => {

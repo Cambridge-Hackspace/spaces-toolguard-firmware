@@ -54,6 +54,17 @@ access control **advisory**: it tells a member no, and nothing stops them
 proceeding anyway. That is a legitimate configuration — it is how you meter a
 machine you cannot interrupt — but be clear which one you have installed.
 
+### A latch is not an egress or fire-safety device
+
+A box that drives a door's latch (§4d) is access control for coming **in**. It
+must never be the only way **out**: free egress — a handle, a push bar, a
+request-to-exit button that cuts the latch's supply directly — is a matter of
+building code and of people, and it does not go through this firmware, its
+Wi-Fi link or its edge. Likewise, a latch that must release on a fire alarm
+does so through the alarm panel's own relay in the latch's supply, not through
+anything here. How the latch fails when this box loses power is the latch's
+own property (§4d), and you choose it when you buy the hardware.
+
 ---
 
 ## 2. Measure before you wire
@@ -196,6 +207,38 @@ software path through this firmware, its lease and a Wi-Fi link. A machine that
 needs a stop that works when all of that is dead needs a real E-stop in series
 with its own supply, and this button beside it, not instead of it.
 
+### d. A door's latch — optional, and the box then registers as a `strike`
+
+Turn on "Drives a latch" in §6. On a yes, the **strike** pin is driven **high for
+exactly the pulse the platform names** — the resource's strike binding's
+`pulse_ms`, set under Resource Wiring — and then low. The box does not choose
+the duration, and a yes that names no pulse releases nothing and says so in the
+log: bind a strike to the resource, or it has no latch as far as the platform
+knows.
+
+The pin is a 3.3 V logic output and must drive a **latch driver**, never the
+latch: a MOSFET or a relay module with its own supply, with a flyback diode
+across any coil. Two kinds of latch, and the difference is what happens when
+this box loses power:
+
+- an **electric strike** is usually *fail-secure*: energize to release, and it
+  stays locked with no power. Drive it directly through the driver.
+- a **maglock** is *fail-safe*: energized to hold, released without power. It
+  needs an inverting driver (the box's pulse must *cut* the supply), and a box
+  rebooting then opens the door for as long as it reboots.
+
+Both are legitimate; know which you have, and see §1 on egress. The box's own
+behaviour is the same for both: low at boot, high for the pulse, low after.
+
+A box that drives a latch and switches nothing is a **door box**: its session
+is the pulse, the panel reads `Door open` while the latch is released and
+`Present card` after, and nothing is signed into. Its stop button (§4c) still
+works and is how a **room** is closed — a door the platform holds open until
+somebody stops it, with the room's power bindings leased meanwhile — because
+the stop names the resource and the platform ends whatever session is open on
+it. A box that drives a latch **and** switches the tool is a room in one box:
+the latch pulses on the yes, the relay follows its lease as in gating mode.
+
 ### Isolation is not optional
 
 - **5 V (or 24 V) must never reach an ESP32 pin.** They are 3.3 V and not
@@ -221,8 +264,8 @@ with its own supply, and this button beside it, not instead of it.
 
 ## 5. Pins
 
-Seven are always used; **sense**, **relay** and **stop** only by the modes that
-need them.
+Seven are always used; **sense**, **relay**, **stop** and **strike** only by the
+modes that need them.
 
 <!-- PINMAP: checked against toolguard-fw/src/main.rs by
      toolguard-core/tests/pinmap.rs. Keep the table shape if you edit it. -->
@@ -241,6 +284,7 @@ need them.
 | sense | 14 | 2 | 15 |
 | relay | 19 | 3 | 16 |
 | stop | 20 | 20 | 17 |
+| strike | 21 | 21 | 18 |
 
 ### Do not move these on a C6 Super Mini
 
@@ -252,7 +296,8 @@ need them.
 | **GPIO4–7** | strapping, JTAG and flash-adjacent |
 
 Freely usable on that board: IO0–IO3, IO14, IO18–IO23. SPI and I²C take seven of
-them, which is why sense, relay and stop are 14, 19 and 20.
+them, which is why sense, relay, stop and strike are 14, 19, 20 and 21 — and
+with all four roles wired a C6 Super Mini has no pin left.
 
 ### The sensed input is digital, and cannot be analog here
 
@@ -299,6 +344,7 @@ after a firmware update rather than dropping into its portal.
 | Ignore blips under (ms) | 100 | the signal must hold this long to count |
 | Tap again to finish | yes, unless gating | the member's own card ends their session |
 | Has a stop button | **no** | `yes` reads the stop pin (§4c). Pressing it ends the session; anyone may, and it is not an E-stop |
+| Drives a latch | **no** | `yes` drives the strike pin for the pulse the platform names on a yes (§4d) — and registers this device in the `strike` role. Not an egress or fire-safety device |
 | Finish after idle (s) | 0 (never) | needs a sensor; ignored without one |
 | Longest session (s) | 0 (none) | the walk-away backstop |
 | Report usage every (s) | 30 | usage is sent in increments, so a reboot costs one interval |
@@ -363,7 +409,7 @@ follow for the machine's box:
   neither switches the tool nor senses it has no other way to know the member
   has finished. Turn it off only if you have set a session cap instead.
 
-### On the platform, in Tool Wiring
+### On the platform, in Resource Wiring
 
 An administrator binds this device to a tool **in a role**. Until that binding
 exists, `tool-on` refuses every card and the refusal looks exactly like a
@@ -379,6 +425,8 @@ the roles it actually claims:
 | reader + senses | `reader`, `sensor` |
 | reader + switches + senses | `reader`, `power`, `sensor` |
 | no reader + switches | `power` |
+| reader + drives a latch | `reader`, `strike` — a door box |
+| reader + switches + drives a latch | `reader`, `power`, `strike` — a room in one box |
 
 ---
 
@@ -391,7 +439,9 @@ the roles it actually claims:
    is — `reads_cards=… gates_power=… senses_running=… (active low) hold=…` — and
    the roles it registered with. Read it. Most misconfigurations show up as a
    tool that quietly never works, and this line is the fastest way to the cause.
-4. **Bind the device to the tool** in Tool Wiring, in the roles from §6.
+4. **Bind the device to the resource** — the tool, or the door — in Resource
+   Wiring, in the roles from §6. A door box is bound in `reader` and `strike`;
+   the strike binding is where its pulse is set.
 5. **Confirm the RC522 answers.** Its version register should read `0x91` or
    `0x92`. A reader that detects nothing with a healthy version register is
    usually the SPI-mode problem in §5.
@@ -413,6 +463,11 @@ the roles it actually claims:
    between the stop pin and GND (§4c). A press with no session open does
    nothing, by design.
 10. **In gating mode, test the fail-safe with the tube disconnected** (§4b).
+    **With a latch, swipe with the latch driver disconnected from the latch**
+    and watch the driver: it should fire for the pulse set on the strike
+    binding and not a moment longer, and the panel should read `Door open`
+    then `Present card`. If the log says `named no pulse`, the resource has no
+    strike binding yet.
 11. **Fire a real job** and check the reported usage against the clock. This is
     where a wrong "Bridge gaps" shows up: far too little usage means the bridge
     is shorter than the machine's pauses.
@@ -461,7 +516,10 @@ Two consequences worth knowing:
 | Usage is a fraction of the real time | "Bridge gaps" is shorter than the machine's pauses. §2c |
 | Usage counts time the machine was idle | sense polarity is inverted. §3 |
 | No card is ever detected, version register fine | SPI mode. §5 |
-| Pressing the stop button does nothing | "Has a stop button" is off, or the switch is not between the stop pin and GND (§4c). It also does nothing when no session is open, which is correct |
+| Pressing the stop button does nothing | "Has a stop button" is off, or the switch is not between the stop pin and GND (§4c). With no session open on this box the stop still goes out naming the resource, so a room held open by a door box is closed by it; the panel shows nothing for that |
+| `Door open` shows but the latch does not release | the driver, its supply, or the latch's own polarity (§4d: a maglock needs an inverting driver). The pin itself went high — the log says `Strike ON` — so the fault is downstream of this box |
+| `ACCESS GRANTED` on a box that should say `Door open`, or the latch never fires | "Drives a latch" is off, or the box also switches the tool (then it is a room in one box and keeps the tool's screens). The log line at boot says `drives_latch=` |
+| The latch fires, the log says `named no pulse` next time | the resource has no `strike` binding on the platform; bind one and set its pulse |
 | The stop button fires on its own | the stop pin is floating or picking up noise from the HV side — check the switch really goes to GND and keep its wire away from the laser supply. Only a contact held for 50 ms counts, so this takes real interference |
 | Panel blank | contrast trimpot, then the I²C address, then the wiring |
 | `Reader fault — see /log` | the RC522 did not answer at all. Check 3V3 and the SPI wiring |
