@@ -366,12 +366,12 @@ things to set:
 - **"Reports usage" = `no` on the second box.** A box that switches power
   reports the time the power was on; two of them would report the same minutes
   twice, and reports accumulate.
-- **Decide its "On disconnect"** in Tool Wiring. The default `fail_off` means a
+- **Decide its "On disconnect"** in Resource Wiring. The default `fail_off` means a
   silent extractor plug withholds the laser's lease too — no laser without the
   filter — which may be exactly what you want. `ignore` lets the laser run
   without it.
 
-**Order, and run-on.** Each `power` binding in Tool Wiring carries three
+**Order, and run-on.** Each `power` binding in Resource Wiring carries three
 timings, and the platform applies them; this box only obeys the lease it is
 given:
 
